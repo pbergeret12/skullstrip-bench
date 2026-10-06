@@ -4,7 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-This is the `airoh-mini` template — a starting point for structuring a reproducible data analysis. It is built on the [`invoke`](https://www.pyinvoke.org/) task runner. The `airoh` pip package provides reusable invoke tasks; this repo customizes them via `tasks.py` and `invoke.yaml`.
+**Skullstrip Bench** runs several containerized skull-stripping tools (SynthStrip, FSL BET, SynthSeg, ANTs) on every T1w image of a BIDS dataset, then builds a self-contained HTML report in which a human rates each brain mask. There is no ground truth: metrics (mask volume, Dice against the majority-vote consensus, runtime) only guide the eye. Two priorities override everything else: **zero setup, no downloads by the tool**, and **extremely readable processing code**.
+
+It is built on the [`invoke`](https://www.pyinvoke.org/) task runner and the `airoh` package of reusable invoke tasks, customized via `tasks.py` and `invoke.yaml` (an `airoh-mini` template project).
 
 ## Persona
 
@@ -13,44 +15,26 @@ Respond as Uncle Airoh: patient, warm, and wise. Assume the user may be new to c
 ## Setup
 
 ```bash
-# uv (recommended):
-uv sync
-
-# pip:
-pip install -r requirements.txt
-
-# conda:
-conda env create -n airoh_env -f environment.yml && conda activate airoh_env
+uv sync    # installs runtime deps plus the dev group (flake8, pytest)
 ```
+
+External requirements: Docker (with its daemon running) **or** Apptainer. Container images are never downloaded: they come from a folder of `.tar` (`docker save`) and/or `.sif` files.
 
 ## Common Commands
 
-With `uv`:
 ```bash
-uv run invoke fetch           # Download source data, record the input manifest
+uv run invoke fetch --bids-source /path/to/bids --containers-source /path/to/images
+                              # Symlink the dataset and image folder, record the manifest
+uv run invoke run-check       # Check everything, write output_data/plan.json (runs nothing)
+uv run invoke run-skullstrip  # Execute the plan: one container run per (T1w × tool)
 uv run invoke run             # Full pipeline (cached: skips steps whose output exists)
 uv run invoke run --force     # Clean everything first, then run from scratch
-uv run invoke run-smoke       # Fast end-to-end check that the plumbing works
-uv run invoke run-notebooks   # Execute notebooks, save figures to output_data/figures/
-uv run invoke run-figure-layout # Write the montage's panel geometry to panel_sizes.json (always re-runs)
-uv run invoke compose-figure  # Render figure_montage.svg to PNG with Inkscape (optional binary)
+uv run invoke run-smoke       # 1 T1w × SynthStrip, end to end
 uv run invoke verify          # Check code, config, data and docs still agree
 uv run invoke clean           # Remove output_data/ contents
 uv run invoke --list          # Show all available tasks
-```
-
-Without `uv` (activate your environment first):
-```bash
-invoke fetch              # Download source data (configured in invoke.yaml under files:)
-invoke run                # Full pipeline (cached: skips steps whose output exists)
-invoke run --force        # Clean everything first, then run from scratch
-invoke run-smoke          # Fast end-to-end check that the plumbing works
-invoke run-notebooks      # Execute notebooks, save figures to output_data/figures/
-invoke run-figure-layout  # Write the montage's panel geometry to panel_sizes.json (always re-runs)
-invoke compose-figure     # Render figure_montage.svg to PNG with Inkscape (optional binary)
-invoke verify              # Check code, config, data and docs still agree
-invoke clean              # Remove output_data/ contents
-invoke --list             # Show all available tasks
+uv run pytest                 # Unit tests (tests/)
+uv run flake8                 # Linter (configured in setup.cfg)
 ```
 
 ## Architecture
@@ -59,7 +43,7 @@ invoke --list             # Show all available tasks
 
 **Execution flow:** `invoke run` triggers the project's analysis pipeline by calling each step in its body, in order. The permanent tasks — `fetch`, `run`, `verify`, `clean` — are always present; intermediate steps are project-specific.
 
-**`pre=` chains do not fire when a task is called as a function.** A `pre=` list only runs when invoke executes that task from the command line. `run(c)` or `clean(c)` called from Python executes the body alone — so a `clean` whose real work lives entirely in `pre=` deletes nothing when `run --force` calls it, silently and with a success message. Umbrella tasks that other tasks call therefore do their work in the body. Keep `pre=` only where the task is a command-line entry point (`run-notebooks` depending on the step that produces its input), and remember that anything threading a flag through — `--force`, `--smoke`, a chunk selector — must call its steps directly, since a `pre=` chain has already run by the time the body sees the flag.
+**`pre=` chains do not fire when a task is called as a function.** A `pre=` list only runs when invoke executes that task from the command line. `run(c)` or `clean(c)` called from Python executes the body alone — so a `clean` whose real work lives entirely in `pre=` deletes nothing when `run --force` calls it, silently and with a success message. Umbrella tasks that other tasks call therefore do their work in the body. Keep `pre=` only where the task is purely a command-line entry point (never called by another task), and remember that anything threading a flag through — `--force`, `--smoke`, a chunk selector — must call its steps directly, since a `pre=` chain has already run by the time the body sees the flag.
 
 **Fetching data — download or symlink:** each data asset in `files:` gets its own `fetch-{name}` task wrapping `airoh.acquisition.fetch_data`, which makes the asset available in one of two ways: **download** from its `url` (default), or **symlink** to already-present data when a source path is given — via `invoke fetch-{name} --source /path` (add `--copy` for a real copy) or a per-asset `source:` key in `invoke.yaml`. The umbrella `fetch` task calls every `fetch-{name}` and exposes a per-asset `--{name}-source` flag that it routes to the matching one. This avoids re-downloading data that already lives on disk (a shared dataset, a sibling repo). Symlinks handle both files and whole directories, and the operation is idempotent. When wiring fetch tasks for a new project, prefer `fetch_data` over the lower-level `download_data`.
 
@@ -67,43 +51,73 @@ invoke --list             # Show all available tasks
 
 See **Data** below for datalad datasets, sensitive data, and recording asset versions.
 
-- `invoke.yaml` — all path and data config (`output_data_dir`, `source_data_dir`, `notebooks_dir`, `files:` for data assets — each with `output_file` plus `url` to download and/or `source` to symlink)
+- `invoke.yaml` — all path and data config (`output_data_dir`, `source_data_dir`, `tools_dir`, `files:` for data assets — each with `output_file` plus `url` to download and/or `source` to symlink)
 - `tasks.py` — project-specific invoke tasks; imports reusable tasks from `airoh` (`airoh.acquisition` for data fetching, `airoh.utils` for general helpers)
 - `analysis/` — pure Python analysis logic, called by tasks in `tasks.py`
-- `notebooks/` — Jupyter notebooks executed by `run_notebooks` via `airoh.utils.run_notebooks`; notebooks receive `OUTPUT_DATA_DIR`, `SOURCE_DATA_DIR` and `FIGURES_DIR` as environment variables, and write into `FIGURES_DIR/{notebook_stem}/`, not directly under `output_data/`
+- `tools/` — one YAML per skull-stripping tool (see **Skullstrip Bench specifics** below), plus a subfolder named after the tool for its annex files
+- `tests/` — pytest unit tests for the pure logic in `analysis/`
 - `source_data/CONTENT.md` and `output_data/CONTENT.md` — authoritative docs for what each data folder contains; update these when data assets change, do not duplicate their content elsewhere
 - `.claude/skills/` — each skill exists twice: as a directory (the source you edit) and as a `.zip` (what gets copied into projects created from this template). **Re-zip after editing a skill**, or projects keep receiving the old version — this has already happened once: `cd .claude/skills && zip -qr <name>.zip <name> -x '*/.*'`
 
-**Analysis vs. notebooks:** Heavy computation belongs in `analysis/` Python code, invoked by `run-{name}` tasks, which write results to `output_data/`. Notebooks are for visualization only — they read from `output_data/` and produce figures. This keeps notebooks fast and focused.
+**Analysis in code:** All computation belongs in `analysis/` Python code, invoked by `run-{name}` tasks, which write results to `output_data/`. This project has no notebooks (the visual output is the HTML report); one may be added at the end for a summary figure, in which case restore the template's `run-notebooks` pattern (each notebook writes into its own folder under figures/, which is its "already ran" marker).
 
 **Idempotent tasks:** Each `run-{name}` task must check whether its outputs already exist and skip execution if they do. This means `invoke run` can be called repeatedly during development of a later step — earlier steps are skipped automatically.
 
-**Caching is by existence, and forcing is a sledgehammer.** A step skips when its output file is there; nothing compares timestamps or hashes against its inputs. That is a deliberate ceiling on complexity — a real dependency graph is more than this template wants to explain, and a cache nobody understands is worse than one that is occasionally too eager. The consequence is that **editing a script or a notebook does not invalidate anything**: the pipeline will happily skip the step you just changed. Two ways out, both explicit:
+**Caching is by existence, and forcing is a sledgehammer.** A step skips when its output file is there; nothing compares timestamps or hashes against its inputs. That is a deliberate ceiling on complexity — a real dependency graph is more than this template wants to explain, and a cache nobody understands is worse than one that is occasionally too eager. The consequence is that **editing a script or a tool config does not invalidate anything**: the pipeline will happily skip the step you just changed. Two ways out, both explicit:
 
 - `invoke clean-{name}` then `invoke run` — redo one step.
 - `invoke run --force` — clean everything, then run from scratch.
 
 When results start looking stale or inconsistent, reach for `--force` rather than trying to reason about what is cached. Do not add content-hash invalidation or a dependency graph to `run`; that is the workflow-engine road, and this template deliberately stops short of it.
 
-**Notebook outputs must live in the notebook's own folder.** `run-notebooks` treats `{figures_base}/{notebook_stem}/` as the "already ran" marker for each notebook. A notebook that writes anywhere else never creates its marker and therefore re-runs on every single `invoke run`, however cheap the rest of the pipeline is.
-
-**Figures: the Inkscape montage pattern.** `output_data/figure_montage.svg` is hand-authored in Inkscape and is the **single source of truth for panel layout** — it links each notebook panel by relative path resolved from `output_data/` (e.g. `output_data/figures/figure_simulation/scatter.png`), and the box it places a panel in is that panel's true on-page size. `run-figure-layout` (`airoh.figures.figure_layout`) reads those boxes out of every entry in `invoke.yaml`'s `figures:` mapping and writes them to `output_data/figures/panel_sizes.json` on **every** `invoke run`; `figure_simulation.ipynb` calls `airoh.figures.panel_size(name, default)` to render each panel at exactly that size, so placement is 1:1 and text is never stretched. `compose-figure` (`airoh.figures.compose_figure`) then renders the montage to `figure_montage.png` via the Inkscape CLI, an optional system binary: a missing `inkscape` warns and skips the export rather than failing `invoke run`.
-
-Resizing a box only fully takes effect after the panel it belongs to is re-rendered — and that panel is a notebook output, so it obeys the same existence-based caching as everything else (see **Caching is by existence**, above). `panel_sizes.json` and the composed montage update on every `invoke run` regardless, but a panel whose notebook did *not* re-run keeps its old pixel size, so Inkscape stretches it into the new box — precisely the problem this pattern exists to avoid. After resizing a box, run `invoke clean-figures && invoke run` (or `invoke run --force`) so the affected panel actually redraws at the new size.
-
-Two rules that must be kept wherever a notebook renders a montage panel: **never** pass `bbox_inches="tight"` (it resizes the canvas after the fact, which is exactly what breaks the 1:1 guarantee) — use `layout="constrained"` to reclaim margins inside the fixed canvas instead — and always save at the montage's DPI, so saved pixels equal `figsize × dpi`. That DPI is not hardcoded in the notebook: `run-notebooks` reads it from `figures:` (→ `figure_montage.dpi`, default 300) via the `montage_dpi` helper in `tasks.py` and exports it as `FIGURE_MONTAGE_DPI`, which the notebook reads. Composing the montage at a different resolution therefore re-sizes the panels with it, instead of silently breaking placement.
-
-`run-figure-layout` is a deliberate exception to the existence-based caching described above: it always re-runs, because it is cheap and a box resized in Inkscape must take effect on the very next `invoke run`, not only after a `clean`.
-
 **Task naming conventions:**
-- Fetch tasks are named `fetch-{name}` (e.g. `fetch-papers`), one per data asset; the umbrella `fetch` calls them all and routes a `--{name}-source` flag to each.
+- Fetch tasks are named `fetch-{name}` (e.g. `fetch-bids`), one per data asset; the umbrella `fetch` calls them all and routes a `--{name}-source` flag to each.
 - Analysis tasks are named `run-{name}` (e.g. `run-preprocessing`, `run-model`).
 - Cleaning tasks mirror them: `clean-{name}` removes only the outputs of the corresponding step. Granular clean tasks are what make a selective re-run possible, so every run step needs one.
-- The top-level `clean` task calls all `clean-{name}` tasks for **analysis** steps in its body — it only ever touches `output_data/`. Source assets have their own mirrored `clean-{name}` tasks (e.g. `clean-papers`) plus an umbrella `clean-source`, kept separate from `clean` since removing a source asset is a deliberate act (e.g. before re-pointing a stale symlink with `fetch-{name} --source`), not something `run --force` should ever do implicitly.
+- The top-level `clean` task calls all `clean-{name}` tasks for **analysis** steps in its body — it only ever touches `output_data/`. Source assets have their own mirrored `clean-{name}` tasks (e.g. `clean-bids`) plus an umbrella `clean-source`, kept separate from `clean` since removing a source asset is a deliberate act (e.g. before re-pointing a stale symlink with `fetch-{name} --source`), not something `run --force` should ever do implicitly.
 - The top-level `run` task calls all steps in its body, in order.
 - `verify` checks the project against its own documentation; see **Verification**.
 
 **Task parameters:** `run-{name}` tasks should expose chunk or subset parameters (e.g. a subject ID, a chunk index) so that individual pieces can be rerun in isolation. They should also support a `smoke` flag for a fast minimal run useful for testing the pipeline end-to-end without running the full analysis.
+
+## Skullstrip Bench specifics
+
+**Validation is separate from processing.** `run-check` verifies everything up front and writes `output_data/plan.json`: the engine, the usable tool configs, and one entry per (T1w × tool) run with every path it reads or writes already decided (`t1w`, `mask`, `record`, `log`, `work_dir`). `run-skullstrip` executes that plan blindly. Its code assumes valid inputs and must stay extremely simple: one `try`/`except` per run, no re-validation. A new check belongs in `run-check`, not in the processing code. `run-check` and `run-metrics` are the deliberate exceptions to existence-based caching: both always re-run. `run-check` is cheap and must see a newly added tool or image. `run-metrics` takes seconds, and the consensus (hence every Dice) changes whenever a run is added, so a cached table would silently go stale.
+
+**The report** (`analysis/report.py`, `analysis/report_figures.py`, `analysis/report_template.html`) uses nilearn `plot_anat` plus `add_contours`, deliberately not niworkflows' `SimpleShowMaskRPT` (as in HALFpipe), whose nipype/templateflow stack can download templates. Slices are chosen from the T1w alone, so every tool is shown on the same slices. Each run's picture is drawn once and saved twice, as JPEG: a thumbnail for the grid (output_data/figures/TOOL/STEM.jpg) and a 300 dpi version (STEM_full.jpg, about 2 px per 1 mm voxel) that only the zoom viewer shows, with wheel zoom, drag, and arrow keys that move to the neighbouring cell at the same zoom and position. Both are cached and belong to their mask: `clean-skullstrip --tools x` removes it too. The HTML is rebuilt on every `run-report`. The template is filled by `string.Template`, so a literal dollar sign in it must be doubled. Its JavaScript is plain ES5 with no external resources, so the file works offline and can be shared alone.
+
+**Metrics guide the eye, they do not judge.** The consensus is a voxel-wise majority vote (strictly more than half) of the tools that succeeded on a T1w. With only two tools it is their intersection, which favors the more conservative mask: read Dice with that in mind until more tools are in.
+
+**Engine logic lives only in `analysis/launcher.py`.** Docker (`docker run --rm --platform linux/amd64 --entrypoint "" -v …`) and Apptainer (`apptainer exec --compat --bind …`) are at parity, auto-detected (Apptainer first) or forced with `run-check --engine`. Images are never downloaded: Docker `docker load -i <name>.tar` if the image is not loaded yet; Apptainer uses `<name>.sif`, building it once from `<name>.tar` (`apptainer build <name>.sif docker-archive://<name>.tar`) inside the containers folder and keeping it. Containers write only into mounted folders. Dev machine: macOS (Apple Silicon) + Docker, so amd64 images run emulated; Apptainer is tested in a Lima VM and on the cluster.
+
+**Adding a tool = one YAML in `tools/` + one image in the containers folder.** Keys: `name` (must equal the file name), `image` (Docker reference), `container` (image file base name), `command` (the full command, with placeholders `{input}`, `{mask}`, `{output_prefix}`, `{tool_dir}` resolved to container paths), optional `mask_output` (default `{mask}`), `postprocess` (`labels_to_mask`) and `timeout_min`. When the timeout runs out, the run is recorded as `timeout`. A Docker container is named so the launcher can `docker kill` it, because killing `docker run` alone leaves the container running in the VM. A dead Docker VM makes `docker run` hang rather than fail, which is what the timeout guards against. Do not write `${VAR}` in a command, since braces are placeholders; `$VAR` is expanded by the shell inside the container. `run-check` reports a config without an image and an image without a config.
+
+**Tool-specific notes.**
+- SynthSeg outputs a segmentation: `labels_to_mask` (`analysis/postprocess.py`) keeps label > 0, CSF included as in SynthStrip's default, then resamples it nearest-neighbour onto the T1w grid.
+- ANTs (`antsBrainExtraction.sh`) needs the OASIS template that `fetch-ants-template` downloads into `tools/ants/template/`. It is the project's only download, because it is tool configuration rather than data.
+- Under Docker on Apple Silicon, SynthSeg (TensorFlow) needs more than 8 GB in the Docker VM. With 8 GB the VM crashed outright, and `docker run` then hangs instead of failing: give Docker 12 GB and enable Rosetta emulation.
+
+**BIDS parsing is a small hand-written parser** (`analysis/bids_inputs.py`, adapted from wonkyconn), not pybids. A T1w's `stem` (its filename without `_T1w.nii.gz`) keeps every entity, so derivative names stay unique across sessions, runs and acquisitions. Subjects without a T1w are reported and skipped, not an error.
+
+**Chunk concept: one run = one (T1w × tool).** Selectors: `--subjects` and `--tools` (comma-separated). A run's JSON record (output_data/runs/TOOL/STEM.json) is its "already done" marker. Failed runs are recorded and skipped too (a slow ANTs run that ran out of memory must not be relaunched on every `invoke run`); retry them with `run-skullstrip --retry-failed` or `clean-skullstrip --tools <name>`.
+
+**Build order (validate each stage with the user before the next):** structure + `run-check` ✔ → `run-skullstrip` + smoke test ✔ → full run SynthStrip + BET (+ metrics) ✔ → HTML report ✔ → SynthSeg ✔ → ANTs ✔ → user-facing CLI (next, see below).
+
+## Status and next session
+
+**Where things stand (2026-10-06).** All four tools work end to end under Docker on the dev Mac. The last full run was 5 subjects × {SynthStrip, FSL BET, SynthSeg, ANTs}: 20/20 runs `ok`, and the report has a zoomable high-resolution viewer. Measured under amd64 emulation, per T1w: BET ≈ 7 s, SynthStrip ≈ 17 s, SynthSeg 3–5 min, ANTs ≈ 6.5 min. Apptainer is still untested (planned in a Lima VM and on the cluster).
+
+**Local testing uses only the fast tools.** On the dev Mac, run SynthStrip and FSL BET only (e.g. `--tools synthstrip,fsl-bet`). Never launch SynthSeg or ANTs locally again: they are validated, and they are slow and memory-hungry under emulation.
+
+**Next: a user-facing command line.** Agreed with the user, not implemented yet. The target is Compute Canada (among others), where compute nodes have **no internet access**: the tool must never download anything.
+1. One entry point with flags: `invoke run --bids PATH --containers PATH --requirements PATH --output PATH [--tools a,b] [--engine docker|apptainer] [--subjects …]`. Defaults may live in `invoke.yaml`; `--output` defaults to `output_data/`, and every output path (plan, derivatives, runs, logs, work, figures, metrics, report, provenance) moves under it.
+2. `--tools` empty → loop over the images in `--containers` and process every compatible one. "Compatible" means a YAML exists in tools/ for the image and its declared requirements are present. Report the others as "not compatible" and skip them.
+3. The `run-check` dataset check becomes **shallow**: `dataset_description.json`, `sub-*` folders, and T1w files found under each subject's anat folder (sessions allowed). It no longer opens any image, so drop `check_t1w` from the check and its tests. A corrupt T1w just fails its run. Mask validation after each run stays.
+4. **Remove `fetch` entirely**: `fetch`, `fetch-bids`, `fetch-containers`, `fetch-ants-template` and their `clean-*` tasks, plus the `files:` entries. `--bids` and `--containers` are used directly (no symlinks into `source_data/`); record the paths used (and their git commit when they are repos) in `plan.json` and the provenance file. Explain in this file why the project departs from the airoh template here.
+5. **container_requirements/** (planned, does not exist yet): a user-provided folder (`--requirements`) with one subfolder per tool (container_requirements/TOOL/) holding whatever the tool needs besides its image: atlases, templates, config files. It is mounted read-only and reached through a `{requirements}` placeholder, which replaces `{tool_dir}`. Each YAML lists the files it needs under a new `requires:` key, and `run-check` only checks they exist. Nothing annex is versioned in the repo any more: delete `tools/ants/` and `tools/.gitignore`. ANTs needs the 3 OASIS files currently in `tools/ants/template/` (`T_template0.nii.gz`, `…BrainCerebellumProbabilityMask.nii.gz`, `…BrainCerebellumRegistrationMask.nii.gz`). Open question for the user: move them to `…/TRAVAIL_DOCTORAT/containers/container_requirements/ants/`?
+6. **README: a table of compatible containers.** For each tool: Docker image and expected file name, how to obtain it once on a machine with internet (`docker pull … && docker save -o <container>.tar …`), required files in `container_requirements/<tool>/` and where to get them, typical runtime, special needs (SynthSeg needs about 12 GB in the Docker VM).
+
+**Lessons from the dev Mac (Docker Desktop).** Both Docker crashes during the session came from the **Mac's disk being full** ("no space left on device"; the Docker VM disk alone is about 37 GB), not from the tools. Memory still matters: SynthSeg also needs the Docker VM raised from 8 to 12 GB. When the VM dies, Docker Desktop stays half alive and the icon does nothing: quit the app, kill the leftover `com.docker.backend` processes, then `open -a Docker`. Never click "Reset to factory defaults", which deletes every loaded image.
 
 ## Data
 
@@ -256,17 +270,11 @@ called.
 
 **Naming:** Prefer self-explanatory names over brevity: `n_subjects` not `n`, `output_path` not `p`, `group_means` not `gm`. Avoid abbreviations unless universally known in the domain (`df` for a DataFrame is fine).
 
-**Linting:** The project linter and its configuration are chosen during `init` and stored in `pyproject.toml` or `ruff.toml`, depending on the package manager chosen at init (see **Setup** — only the `uv` path keeps `pyproject.toml`). Run it before committing. Never disable a lint rule without a comment explaining why.
+**Linting:** flake8, configured in `setup.cfg` (max line length 100); run `uv run flake8` before committing. Never disable a lint rule without a comment explaining why.
 
-**Testing:** Two baseline checks, and they cover different failures. `invoke run-smoke` is the behavioural one: does the pipeline run end to end and produce something. `invoke verify` is the structural one: do the code, config, data and docs still describe the same project. Run both before committing; neither substitutes for the other. Add unit tests in a tests directory, using the project's chosen test framework, when a function contains non-trivial logic, has edge cases the smoke test won't catch, or is shared across multiple steps. Unit tests are optional for simple glue/orchestration code but encouraged for any pure transformation or computation logic in `analysis/`. The test framework and directory are configured during `init`.
+**Testing:** Two baseline checks, and they cover different failures. `invoke run-smoke` is the behavioural one: does the pipeline run end to end and produce something. `invoke verify` is the structural one: do the code, config, data and docs still describe the same project. Run both before committing; neither substitutes for the other. Add unit tests in a tests directory, using the project's chosen test framework, when a function contains non-trivial logic, has edge cases the smoke test won't catch, or is shared across multiple steps. Unit tests are optional for simple glue/orchestration code but encouraged for any pure transformation or computation logic in `analysis/`. This project uses pytest, with tests in `tests/` (`uv run pytest`).
 
-**Template cleanup:** When starting a new project from this template, remove the demo code before adding project-specific work:
-- Delete `run_simulation` from `tasks.py` and remove it from the `pre=` chains on `run_notebooks` and `run`
-- Delete `analysis/simulation.py` (and the `analysis/` folder if it stays empty)
-- Clear or replace `source_data/CONTENT.md` and `output_data/CONTENT.md` with project-specific descriptions
-- Update `invoke.yaml` (`files:`, paths) for the new project's data sources
-
-**Adding a new analysis step:** add a function to `analysis/`, add a `run-{name}` task and a matching `clean-{name}` task in `tasks.py`, call both from the bodies of the top-level `run` and `clean` tasks (see the `pre=` warning above — a body call, not `pre=`), and create or extend a notebook in `notebooks/` for visualization.
+**Adding a new analysis step:** add a function to `analysis/`, add a `run-{name}` task and a matching `clean-{name}` task in `tasks.py`, call both from the bodies of the top-level `run` and `clean` tasks (see the `pre=` warning above — a body call, not `pre=`).
 
 **Evolving CLAUDE.md:** Run `invoke verify` after any structural change — it catches the mechanical half of this instruction (renamed tasks, moved paths, undocumented outputs) that is otherwise left to memory. Keep this file current as the project grows. It should always reflect the actual scope of the project — what it does, what data it uses, and what analysis steps it contains. When adding or removing a task, rename a folder, or change the pipeline structure, update CLAUDE.md in the same commit. Stale guidance here misleads future AI sessions and collaborators alike.
 
