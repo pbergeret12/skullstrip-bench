@@ -1,24 +1,23 @@
 # 📁 Source Data Contents
 
-After `invoke fetch` is complete, expect the following content:
+Nothing here is downloaded. After `invoke fetch`, expect:
 
-- `YNIMG_BrainParcellation_summary.tsv` — a spreadsheet with some data on a
-  series of articles, downloaded from figshare.
-- `MANIFEST.json` — what each declared asset actually resolved to: the URL or
-  the real path behind a symlink, its size and checksum, and the commit of the
-  repository it belongs to when it has one. Written by `invoke fetch`.
+- `bids` — a symlink to the BIDS dataset to benchmark (made by `invoke fetch-bids --source /path`).
+  Only its dataset_description.json and the T1w images (sub-X/[ses-Y/]anat/*_T1w.nii.gz) are read.
+  Test dataset: 5 subjects of OpenNeuro ds000030 (public, de-identified).
+- `containers` — a symlink to the folder of container images (made by
+  `invoke fetch-containers --source /path`). It holds only images: Docker archives
+  `<name>.tar` (from `docker save`) and/or Apptainer `<name>.sif` files, with no
+  configuration (that lives in `tools/`). With Apptainer, a missing `.sif` is built once from its
+  `.tar` and kept in the real folder, through the link.
+- `MANIFEST.json` — what each asset resolved to (the real path behind each link),
+  written by `invoke fetch`. Tracked in git.
 
-📝 Note: tsv files are **ignored by Git** (see `.gitignore`), so data assets
-won't be tracked by default. `MANIFEST.json` is the deliberate exception — it is
-the record of which inputs a run consumed.
+📝 Access: this project ships no data. Whoever runs it must already have a BIDS
+dataset and the container images on disk. When it runs on a restricted dataset,
+that dataset's own access rules apply, and nothing derived from it should be
+committed (see `.gitignore` here and in `output_data/`).
 
-📝 Note: assets here may be **symlinks** to data that already lives elsewhere on
-disk, rather than local copies — this happens when a fetch task is run with
-`--source` (e.g. `invoke fetch-papers --source /path`, or `invoke fetch
---papers-source /path`), or a `source:` key is set in `invoke.yaml`. The manifest
-records what the link pointed at, so a symlinked input stays identifiable.
-
-📝 Note: if this project's data is sensitive, restricted, or needs credentials to
-retrieve, say so here — a collaborator whose `fetch` came back empty needs to
-know whether the pipeline is broken or they simply lack access. See CLAUDE.md,
-"Sensitive and restricted data".
+📝 Both entries are links: `invoke clean-bids` / `clean-containers` remove the
+link, never the data it points to. `fetch` never overwrites an existing link, so
+clean first to re-point one.

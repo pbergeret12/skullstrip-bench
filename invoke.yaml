@@ -1,33 +1,18 @@
 # invoke.yaml
 
-# Notebooks folders
-notebooks_dir: notebooks
-
 # source data folders
 source_data_dir: source_data
 
 # output data folders
 output_data_dir: output_data
 
-# figures base dir — each notebook writes into figures_dir/<notebook_stem>/,
-# which airoh also uses as the "already ran" sentinel for that notebook.
-figures_dir: output_data/figures
+# tool configurations: one YAML per tool (see analysis/tool_configs.py)
+tools_dir: tools
 
-# Composed demo figure — the worked example of the airoh.figures Inkscape
-# montage pattern (see CLAUDE.md, "Figures: the Inkscape montage pattern").
-#
-# `svg` is a pipeline *source*, hand-authored in Inkscape, even though it
-# lives under output_data/ — it has to, because it links the notebook panels
-# by relative path and those links resolve from its own directory. It is also
-# the single source of truth for panel geometry: `run-figure-layout` reads each
-# placed box out of it into figures_dir/panel_sizes.json, and the notebook
-# renders each panel at exactly that size. `compose-figure` then renders it
-# with the Inkscape CLI, an optional external dependency (see README.md).
-figures:
-  figure_montage:
-    svg: output_data/figure_montage.svg
-    output: output_data/figure_montage.png
-    dpi: 300
+# HTML report: mask volumes outside this range (mL) are highlighted. A rough
+# adult brain range — adjust for children or atypical populations.
+report:
+  plausible_volume_ml: [1100, 1600]
 
 # provenance records
 #
@@ -47,9 +32,7 @@ verify:
   # Check names to skip entirely, e.g. [lint, tracked_size].
   skip_checks: []
   # Glob patterns exempt from the path and tracked-file checks.
-  # ruff.toml: CLAUDE.md mentions it conditionally (only non-uv projects
-  # have it), which otherwise trips the doc_paths check in this uv project.
-  ignore_paths: [ruff.toml]
+  ignore_paths: []
   # Largest file git may track before the check fails (default 10 MB).
   max_tracked_bytes: 10485760
 
@@ -61,10 +44,22 @@ verify:
 #                instead of downloading (a per-asset alternative to the
 #                `invoke fetch-{name} --source ...` flag)
 files:
-  papers:
-    url: https://api.figshare.com/v2/file/download/9843721
-    output_file: source_data/YNIMG_BrainParcellation_summary.tsv
-    # source: /path/to/existing/file.tsv   # symlink instead of downloading
+  # The BIDS dataset to benchmark. Never downloaded: link an existing one with
+  # `invoke fetch --bids-source /path/to/bids` (or set `source:` here).
+  bids:
+    output_file: source_data/bids
+  # The container images (Docker `.tar` archives and/or `.sif` files, nothing
+  # else). Never downloaded either: `invoke fetch --containers-source /path`.
+  containers:
+    output_file: source_data/containers
+  # The OASIS brain template used by antsBrainExtraction.sh, from the ANTs
+  # templates on figshare (doi:10.6084/m9.figshare.915436). The one download
+  # in this project: it is tool configuration, not data, and lives next to
+  # tools/ants.yaml. `invoke fetch-ants-template` unzips what ANTs needs into
+  # tools/ants/template/.
+  ants_template:
+    url: https://ndownloader.figshare.com/files/3133832
+    output_file: tools/ants/Oasis.zip
 
 # datalad datasets (optional)
 #

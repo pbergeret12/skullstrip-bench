@@ -1,0 +1,7 @@
+# SynthStrip (FreeSurfer): deep-learning skull stripping, writes the mask directly.
+name: synthstrip
+image: freesurfer/synthstrip:1.8
+container: synthstrip_1.8
+command: mri_synthstrip -i {input} -m {mask}
+# Under amd64 emulation on a Mac; a stuck run is stopped and recorded as `timeout`.
+timeout_min: 20

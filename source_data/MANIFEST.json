@@ -1,19 +1,45 @@
 {
   "assets": {
-    "papers": {
+    "ants_template": {
       "datalad_id": null,
-      "declared_source": "https://api.figshare.com/v2/file/download/9843721",
+      "declared_source": "https://ndownloader.figshare.com/files/3133832",
       "exists": true,
       "git": null,
       "is_symlink": false,
       "mode": "download",
-      "mtime": "2026-08-03T02:25:41+00:00",
-      "path": "source_data/YNIMG_BrainParcellation_summary.tsv",
-      "resolved_path": "/home/pbellec/git/airoh-mini/source_data/YNIMG_BrainParcellation_summary.tsv",
-      "sha256": "6eee27eb7ef7d280aa3ae5173e1e2abbb9c06ecfd77e99d2b0d7821633da16de",
-      "size_bytes": 65443
+      "mtime": "2026-10-06T19:13:55+00:00",
+      "path": "tools/ants/Oasis.zip",
+      "resolved_path": "/Users/pierrebergeret/Documents/REPOS_GITHUB/skullstrip-bench/tools/ants/Oasis.zip",
+      "sha256": "4f1318d8fa0f31052cce2c7da877205cd73fe98edda3129042d376689a31b597",
+      "size_bytes": 55360609
+    },
+    "bids": {
+      "datalad_id": null,
+      "declared_source": null,
+      "exists": true,
+      "git": null,
+      "is_symlink": true,
+      "mode": "symlink",
+      "mtime": "2026-10-06T14:54:32+00:00",
+      "path": "source_data/bids",
+      "resolved_path": "/Users/pierrebergeret/Documents/TRAVAIL_DOCTORAT/sample_ds30",
+      "sha256": null,
+      "size_bytes": null
+    },
+    "containers": {
+      "datalad_id": null,
+      "declared_source": null,
+      "exists": true,
+      "git": null,
+      "is_symlink": true,
+      "mode": "symlink",
+      "mtime": "2026-10-06T18:46:28+00:00",
+      "path": "source_data/containers",
+      "resolved_path": "/Users/pierrebergeret/Documents/TRAVAIL_DOCTORAT/containers/skullstrip",
+      "sha256": null,
+      "size_bytes": null
     }
   },
-  "recorded_at": "2026-08-04T14:19:06+00:00",
+  "recorded_at": "2026-10-06T21:05:23+00:00",
   "schema": "airoh/manifest/1"
 }

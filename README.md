@@ -1,198 +1,158 @@
-# Airoh Template: Reproducible Pipelines Made Simple
+# Skullstrip Bench
 
 _why don't you have a cup of relaxing jasmine tea?_
 
-This repository is a template for structuring a reproducible data analysis. Built on the [`invoke`](https://www.pyinvoke.org/) task runner, it lets you go from clean clone to output figures with just a few commands.
+Skullstrip Bench runs several containerized skull-stripping tools (SynthStrip, FSL BET, SynthSeg, ANTs) on every T1w image of a BIDS dataset, then builds a self-contained HTML report in which you rate each brain mask. There is no ground truth: the final call is yours, and the metrics (mask volume, Dice against the consensus of all tools, runtime) are only there to guide the eye.
 
-The logic is powered by [`airoh`](https://pypi.org/project/airoh/), a lightweight, pip-installable Python package of reusable `invoke` tasks. This repository runs a small demo analysis to show how the template works. It should be easy to adapt to a variety of projects.
+Two goals drive the design: **no setup and no downloads** (the tool runs container images you already have), and **processing code that stays easy to read**.
 
-**This template is designed to be used with [Claude Code](https://claude.ai/code).** Claude reads the project's `CLAUDE.md` at the start of every session and knows the pipeline conventions — task naming, idempotency, smoke tests — out of the box. To initialize a new project from this template, open Claude Code and run `/init-airoh-project`. The skill will walk you through project setup, fetch/run/clean task implementation, and a smoke test end-to-end.
+Built on the [`invoke`](https://www.pyinvoke.org/) task runner and [`airoh`](https://pypi.org/project/airoh/) (from the `airoh-mini` template).
 
-⚠️ **Status**: This template is in its early days. Expect rapid iteration and changes.
+⚠️ **Status**: built stage by stage during BrainHack School. Working end to end with SynthStrip, FSL BET, SynthSeg and ANTs under Docker (Apptainer still to be tested). Next: a single command with `--bids`, `--containers`, `--requirements`, `--output` and `--tools` flags, without any download, so it runs on clusters without internet such as Compute Canada.
 
 ---
 
-## ✨ TL;DR:
+## ✨ TL;DR
 
-This repository is a [GitHub template](https://github.com/airoh-pipeline/airoh-template/generate). Click **"Use this template"** to create your own analysis project.
 ```bash
 uv sync
-uv run invoke fetch
+uv run invoke fetch --bids-source /path/to/bids --containers-source /path/to/images
+uv run invoke run-check
 uv run invoke run
 ```
-Voilà — from clone to full reproduction.
 
 ---
 
 ## 🚀 Quick Start
 
-### **Step 1**: Install dependencies
+### Step 1: Install
 
-Using `uv` (recommended):
 ```bash
 uv sync
 ```
-This creates a `.venv` and installs all dependencies from `pyproject.toml`.
 
-Using `pip` (e.g. in a virtual environment):
+This creates a `.venv` with the runtime dependencies plus the dev tools (`flake8`, `pytest`).
+
+You also need a container engine: **Docker** (daemon running) or **Apptainer**. Apptainer is used if available, otherwise Docker. Force one with `invoke run-check --engine docker`.
+
+### Step 2: Link your data
+
+Nothing is ever downloaded. You point the project at two folders you already have:
+
+- a **BIDS dataset** (with a dataset_description.json and T1w images in each subject's anat folder, sessions allowed);
+- a **containers folder** holding only images: Docker archives (`<name>.tar`, made with `docker save`) and/or Apptainer `<name>.sif` files.
+
 ```bash
-pip install -r requirements.txt
+uv run invoke fetch --bids-source /path/to/bids --containers-source /path/to/images
+uv run invoke fetch-bids --source /path/to/bids      # or one at a time
 ```
 
-Using `conda`:
+Both become symlinks in `source_data/`. `fetch` also downloads, once, the brain template ANTs needs (into `tools/ants/template/`): it is part of the tool's configuration, not data. To point at another dataset, remove the link first with `uv run invoke clean-bids` (or `clean-containers`, or `clean-source` for both); this removes the link, never your data.
+
+### Step 3: Check, then run
+
 ```bash
-conda env create -n airoh_env -f environment.yml
-conda activate airoh_env
+uv run invoke run-check
 ```
 
----
-
-### **Step 2**: Fetch the source data
+`run-check` launches nothing. It checks the dataset (each T1w opens, is 3D, and has a plausible grid; subjects without a T1w are reported), the tool configs in `tools/` against the images in the containers folder, the engine, and the output folder. Then it prints a ✔/✘ summary and writes the run plan to `output_data/plan.json`. Restrict it with `--subjects 10159,10171` or `--tools synthstrip`.
 
 ```bash
-invoke fetch
+uv run invoke run            # check → skullstrip → metrics → report
+uv run invoke run --force    # clean everything, then run from scratch
 ```
 
-Downloads the configured file(s) listed under `files:` in `invoke.yaml`. Every asset also has its own `fetch-{name}` task (here, `fetch-papers`), and the umbrella `fetch` calls them all.
+Each (T1w × tool) run writes a BIDS-derivative mask, its container log, and a record of its status and duration. A run that fails (a tool error, out of memory, longer than the tool's `timeout_min`, or a mask that is missing, not binary, or off the T1w grid) is recorded and the next one starts.
 
-Already have the data on disk? Point a fetch task at it and it creates a **symlink** instead of downloading. Each `fetch-{name}` takes a plain `--source`; the umbrella `fetch` routes a per-asset `--{name}-source` to the matching one:
+Every step skips work whose output already exists, so `invoke run` is cheap to repeat. Failed runs count as done too, so a slow tool that crashed is not relaunched every time: retry with `uv run invoke run-skullstrip --retry-failed`, or `uv run invoke clean-skullstrip --tools fsl-bet` to redo one tool. The flip side: editing a script does **not** re-run anything. Use `invoke run --force`, or a `clean-{name}` task, to rebuild.
 
-```bash
-invoke fetch-papers --source /path/to/existing/data   # symlink to existing data
-invoke fetch-papers --source /path/to/existing/data --copy  # make a real copy instead
-invoke fetch --papers-source /path/to/existing/data   # same, via the umbrella task
-```
+### Step 4: Judge the masks
 
-You can also set a per-asset `source:` under `files:` in `invoke.yaml` to make this the default for that asset. Files *and* whole directories are supported, and the operation is idempotent.
+Open **`output_data/report.html`** in a browser. It has one row per T1w and one column per tool. Each cell shows the T1w with the mask's outline in red, in axial, coronal and sagittal views (the same slices for every tool); click a picture to open its high-resolution version: zoom with the mouse wheel, drag to move, and use the arrow keys to switch to another tool (← →) or T1w (↑ ↓) **at the same zoom and position**. Under each picture:
+- the mask volume, highlighted outside the plausible range set in `invoke.yaml` (`report: plausible_volume_ml`, 1100–1600 mL by default);
+- the Dice against the consensus of the tools;
+- the runtime.
 
-Want to see it work? This little walkthrough stands in a `/tmp` copy for a dataset that already lives on your disk:
+A failed run shows its error instead. Rate each mask **OK / Fail / Doubtful**, add a comment, then use **Export notes (CSV)**. Notes are kept in your browser between reloads, but the CSV export is your real record.
 
-```bash
-invoke fetch                                         # downloads the tsv
-cp source_data/*.tsv /tmp/shared_papers.tsv          # pretend it's a shared dataset
-rm source_data/*.tsv                                 # clear the local copy
-invoke fetch --papers-source /tmp/shared_papers.tsv  # symlinks instead of downloading
-ls -l source_data/                                   # -> /tmp/shared_papers.tsv
-```
+The file is self-contained (images embedded), so you can send it as is. It shows participants' brains, though, so share it only where the dataset's rules allow.
 
-The `rm` step matters: fetch will never overwrite a real file sitting at the destination. To re-point a stale symlink (or drop a real downloaded file) instead of removing it by hand, use `invoke clean-papers` (or the umbrella `invoke clean-source`) — not `invoke clean`, which only touches `output_data/` and never source data. Once the old file is gone, running the fetch command again changes nothing if the link already points where you asked — it just notices and moves on.
-
-Each `--source` names one path for one asset — there's deliberately no single flag that points every asset at one place, since that only ever means "link them all to the same file." As you add assets, give each one its own `fetch-{name}` task and its own `--{name}-source` on the umbrella `fetch`.
-
-> **Datalad datasets are different.** `--source` symlinks or copies a plain file or folder; it does **not** run `datalad get`, so a symlinked datalad dataset exposes only whatever content is already present (un-fetched files show up as broken symlinks), and `--copy` errors on those un-fetched files. For a datalad dataset, use `airoh.datalad.install_dataset`/`get_data` with a `datasets:` entry in `invoke.yaml` instead — see `CLAUDE.md`, "Datalad datasets, and plain assets".
-
----
-
-### **Step 3**: Run the full pipeline
+### Step 5: Smoke test and consistency checks
 
 ```bash
-invoke run
-```
-
-Runs the full analysis pipeline in order. Steps that have already produced output are skipped automatically — only missing outputs are recomputed.
-
-That caching is by file existence, not by content: **a step you just edited will still be skipped**, because its old output is sitting right there. When results start looking stale, force a clean rebuild:
-
-```bash
-invoke run --force    # clean everything, then run from scratch
-```
-
-To redo a single step, remove its outputs and run again:
-
-```bash
-invoke clean-simulation
-invoke run
-```
-
-`invoke run` also writes `output_data/PROVENANCE.json`, recording the project's git commit, the environment, the inputs it consumed and a checksum of every output — so a result stays traceable to whatever produced it.
-
----
-
-### **Step 4**: Check that everything still agrees
-
-```bash
-invoke verify
-```
-
-Compares the project against its own documentation: the task list in this README, the packages in `requirements.txt` versus `pyproject.toml`, the paths the docs mention, each data folder against its `CONTENT.md`, config keys, the size and type of what git tracks, and the linter. It exits non-zero if anything has drifted.
-
-Run it before committing. It is deliberately not part of `invoke run` — reproducing results should never depend on the documentation being tidy.
-
----
-
-### **Step 5**: Clean outputs
-
-```bash
-invoke clean          # remove all outputs
-invoke clean-{name}   # remove outputs of one specific step
-invoke clean-source   # remove all source data assets (e.g. before re-fetching)
+uv run invoke run-smoke   # 1 T1w × SynthStrip, end to end
+uv run invoke verify      # code, config, data and docs still agree
+uv run pytest             # unit tests
+uv run flake8             # linter
 ```
 
 ---
 
-## 🧠 Design principles
+## 🧩 Adding a tool
 
-Airoh projects follow a few conventions that keep analyses fast, reproducible, and easy to pick up:
+One YAML in `tools/` plus one image in the containers folder:
 
-- **Analysis in code, visualization in notebooks.** Heavy computation lives in `analysis/` Python modules and is run by `invoke` tasks. Notebooks only read results and produce figures — so they stay fast.
-- **Idempotent steps.** Each `run-{name}` task checks whether its outputs already exist and skips if they do. You can call `invoke run` repeatedly while working on a later step without re-running earlier ones. The flip side: caching is by existence, so `invoke run --force` is how you rebuild after editing something.
-- **Mirrored clean tasks.** Every `run-{name}` has a matching `clean-{name}` that removes only its outputs. The top-level `clean` calls them all.
-- **Smoke test.** `invoke run-smoke` does a fast minimal pass to verify the pipeline end-to-end.
-- **Checked documentation.** `invoke verify` compares the project against its own docs, so drift is caught mechanically instead of by memory.
-- **Recorded provenance.** `fetch` and `run` write `MANIFEST.json` and `PROVENANCE.json` — what the inputs actually were, and what produced the outputs.
-- **Hand-authored montage, single source of truth for layout.** `output_data/figure_montage.svg` places each notebook panel by relative path; `run-figure-layout` reads those boxes into `panel_sizes.json` so notebooks render every panel at exactly the size it will be placed at, and `compose-figure` renders the montage with Inkscape (optional — skipped with a warning if not installed). See `CLAUDE.md`, "Figures: the Inkscape montage pattern".
+```yaml
+# tools/synthstrip.yaml
+name: synthstrip                    # must match the file name
+image: freesurfer/synthstrip:1.8    # Docker reference
+container: synthstrip_1.8           # <containers>/synthstrip_1.8.tar or .sif
+command: mri_synthstrip -i {input} -m {mask}
+# mask_output: "{output_prefix}_mask.nii.gz"   # if the tool picks its own mask name
+# postprocess: labels_to_mask                    # if the tool outputs a segmentation
+# timeout_min: 30                                # stop a run stuck for 30 minutes
+```
+
+Placeholders `{input}`, `{mask}`, `{output_prefix}` and `{tool_dir}` are replaced by paths inside the container. Annex files such as templates go in a `tools/` subfolder named after the tool, mounted as `{tool_dir}`.
 
 ---
 
 ## 🧰 Task Overview
 
-| Task                | Description                                              |
-| ------------------- | -------------------------------------------------------- |
-| `fetch`             | Gets all source data; routes a per-asset `--{name}-source` to each `fetch-{name}` |
-| `fetch-{name}`      | Gets one asset: downloads from `invoke.yaml`, or symlinks/copies existing data via `--source` |
-| `run`               | Runs the full pipeline (all `run-{name}` steps in order); `--force` cleans first |
-| `run-{name}`        | Runs one analysis step; skips if outputs already exist   |
-| `run-simulation`    | The demo analysis step shipped with this template        |
-| `run-figure-layout` | Writes the montage's panel geometry to `output_data/figures/panel_sizes.json`; always re-runs |
-| `run-notebooks`     | Executes notebooks and saves figures to `output_data/figures/` |
-| `compose-figure`    | Renders `figure_montage.svg` to PNG with Inkscape (optional binary) |
-| `run-smoke`         | Fast end-to-end pass to check the pipeline is wired correctly |
-| `verify`            | Checks that code, config, data and docs still agree      |
-| `clean`             | Removes all generated outputs                            |
-| `clean-{name}`      | Removes outputs of one specific step                     |
-| `clean-figures`     | Removes the figures dir (panels, notebook sentinels, panel_sizes.json) |
-| `clean-figure`      | Removes the composed montage PNG (never the hand-authored SVG) |
-| `clean-source`      | Removes all source data assets; routes to each `clean-{name}` |
-| `clean-papers`      | Removes the 'papers' source asset                        |
+| Task               | Description |
+| ------------------ | ----------- |
+| `fetch`            | Links all source data; routes `--bids-source` / `--containers-source` to the tasks below |
+| `fetch-bids`       | Symlinks (or `--copy`) a BIDS dataset to `source_data/bids` |
+| `fetch-ants-template` | Downloads the OASIS template used by ANTs into `tools/ants/template/` (the project's only download: tool configuration, not data) |
+| `fetch-containers` | Symlinks (or `--copy`) the folder of container images to `source_data/containers` |
+| `run-check`        | Checks everything without running anything and writes `output_data/plan.json`; always re-runs |
+| `run-skullstrip`   | Executes the plan, one container run per (T1w × tool); `--subjects`, `--tools`, `--retry-failed` |
+| `run-metrics`      | Writes `output_data/metrics.csv`: volume, Dice against the consensus, duration and status per run; always re-runs |
+| `run-report`       | Writes `output_data/report.html`: masks drawn on the T1w, metrics, rating buttons and CSV export; pictures are cached, the HTML is always rebuilt |
+| `run`              | Full pipeline (all `run-{name}` steps in order); `--force` cleans first |
+| `run-smoke`        | Fast end-to-end pass: 1 T1w × SynthStrip |
+| `verify`           | Checks that code, config, data and docs still agree |
+| `clean`            | Removes all computed outputs |
+| `clean-check`      | Removes `output_data/plan.json` |
+| `clean-skullstrip` | Removes masks, run records, logs, work folders and their report pictures; `--tools` limits it to some tools |
+| `clean-metrics`    | Removes `output_data/metrics.csv` |
+| `clean-report`     | Removes the report and its cached pictures |
+| `clean-source`     | Removes both source links (calls `clean-bids` and `clean-containers`) |
+| `clean-ants-template` | Removes the downloaded ANTs template |
+| `clean-bids`       | Removes the `source_data/bids` link |
+| `clean-containers` | Removes the `source_data/containers` link |
 
-Use `invoke --list` or `invoke --help <task>` for descriptions and usage.
+Use `uv run invoke --list` or `uv run invoke --help <task>` for details.
 
 ---
 
 ## 📁 Folder Structure
 
-| Folder / File  | Description                              |
-| -------------- | ---------------------------------------- |
-| `analysis/`    | Pure Python analysis logic, called by invoke tasks |
-| `notebooks/`   | Jupyter notebooks for visualization (one per figure) |
-| `source_data/` | Raw source datasets — see [`source_data/CONTENT.md`](source_data/CONTENT.md) |
-| `output_data/` | Generated results and figures — see [`output_data/CONTENT.md`](output_data/CONTENT.md) |
-| `tasks.py`     | Project-specific invoke tasks            |
-| `invoke.yaml`  | Config: paths, data sources, parameters  |
+| Folder / File  | Description |
+| -------------- | ----------- |
+| `analysis/`    | Processing code called by the tasks: BIDS parsing, image checks, tool configs, the container launcher (the only engine-aware module), the checks |
+| `tools/`       | One YAML per skull-stripping tool |
+| `tests/`       | pytest unit tests |
+| `source_data/` | Links to the inputs; see [`source_data/CONTENT.md`](source_data/CONTENT.md) |
+| `output_data/` | Plan, masks, logs, metrics and report; see [`output_data/CONTENT.md`](output_data/CONTENT.md) |
+| `tasks.py`     | The invoke tasks |
+| `invoke.yaml`  | Config: paths and data assets |
 
 ---
 
-## 🧭 Tips
+## 🔒 Data
 
-* Use `invoke --complete` for tab-completion support
-* Configure paths and data sources in `invoke.yaml`
-* To use this template for a new project, start from [`airoh-template`](https://github.com/airoh-pipeline/airoh-template) and customize `tasks.py` + `invoke.yaml`
-
----
-
-## 🔁 Want to contribute?
-
-Submit an issue or PR on [`airoh`](https://github.com/SIMEXP/airoh).
+Masks, the report and per-run metrics show or describe participants' brains, so everything under `output_data/` stays out of git (only `PROVENANCE.json` is tracked). The same goes for `source_data/` (only `MANIFEST.json`). Keep it that way when running on restricted datasets.
 
 ---
 
@@ -200,16 +160,4 @@ Submit an issue or PR on [`airoh`](https://github.com/SIMEXP/airoh).
 
 Inspired by Uncle Iroh from *Avatar: The Last Airbender*, `airoh` aims to bring simplicity, reusability, and clarity to research infrastructure — one well-structured task at a time.
 
-**Core principles:**
-
-- **Reproducibility first.** A pipeline is only useful if someone else — or future you — can run it from scratch and get the same result. Every step is scripted, every dependency declared.
-- **Simple by default, extensible by need.** Three tasks (`fetch`, `run`, `clean`) cover most projects. Add complexity only when the analysis demands it.
-- **Code for analysis, notebooks for figures.** Heavy computation belongs in `analysis/` Python modules. Notebooks are for reading results and producing plots — they should be fast and focused.
-- **Idempotent steps.** Re-running `invoke run` never wastes time. Each step checks whether its outputs exist and skips if they do.
-- **AI-native.** This template is built to be initialized and extended with Claude Code. The `CLAUDE.md` file gives Claude the context it needs to help with the pipeline without needing to re-explain conventions every session.
-
----
-
-### Uncle Airoh
-
-When working in this project, Claude Code responds as **Uncle Airoh**: patient, warm, and wise. Errors are explained gently, tradeoffs are framed as learning opportunities, and a calming cup of jasmine tea is always on offer when things get heated.
+When working in this project, Claude Code responds as **Uncle Airoh**: patient, warm, and wise.

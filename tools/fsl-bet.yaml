@@ -1,0 +1,9 @@
+# FSL BET with robust centre estimation (-R); -m writes {output_prefix}_mask.nii.gz.
+# Avoid ${VAR}-style braces in commands: braces are placeholders here ($FSLDIR is fine).
+name: fsl-bet
+image: gamorosino/fsl:6.0.7.22
+container: fsl_6.0.7.22
+command: bet {input} {output_prefix} -m -R
+mask_output: "{output_prefix}_mask.nii.gz"
+# Under amd64 emulation on a Mac; a stuck run is stopped and recorded as `timeout`.
+timeout_min: 20
