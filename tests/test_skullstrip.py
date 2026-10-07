@@ -47,10 +47,13 @@ def test_failed_run_counts_as_done_unless_retrying(tmp_path):
     assert is_done(run, retry_failed=True)
 
 
-def test_log_tail_leaves_out_the_command_header(tmp_path):
-    log = tmp_path / "run.log"
-    log.write_text("docker run ... secret command\n\nline 1\n\nerror: boom\n")
-    assert log_tail(log) == "line 1 | error: boom"
+def test_log_tail_prefers_errors_and_skips_the_command_line(tmp_path):
+    run = {"log": str(tmp_path / "run.log"), "err": str(tmp_path / "run.err")}
+    (tmp_path / "run.log").write_text("# docker run ... the command\nline 1\n")
+    (tmp_path / "run.err").write_text("")
+    assert log_tail(run) == "line 1"
+    (tmp_path / "run.err").write_text("warning\n\nerror: boom\n")
+    assert log_tail(run) == "warning | error: boom"
 
 
 def test_failure_status():
@@ -72,3 +75,31 @@ def test_threads_reach_the_container_environment(tmp_path):
         command = container_command(engine, "img", [], ["tool"], threads=6)
         assert "ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS=6" in command
         assert "OMP_NUM_THREADS=6" in command
+
+
+def test_a_run_leaves_only_logs_mask_and_record(tmp_path, monkeypatch):
+    """The scratch folder is deleted; the .log ends with the status, the .err with the reason."""
+    import analysis.skullstrip as skullstrip
+
+    def fake_container(engine, image, mounts, command, log_file, err_file, **options):
+        Path(log_file).parent.mkdir(parents=True, exist_ok=True)
+        Path(log_file).write_text("# fake command\n")
+        Path(err_file).write_text("tool: bad input\n")
+        return 1
+
+    monkeypatch.setattr(skullstrip, "prepare_image", lambda *arguments: "image")
+    monkeypatch.setattr(skullstrip, "run_container", fake_container)
+    run = {"tool": "fsl-bet", "stem": "sub-01", "subject": "01", "t1w": "t1w.nii.gz",
+           "mask": str(tmp_path / "state" / "masks" / "m.nii.gz"),
+           "record": str(tmp_path / "state" / "runs" / "fsl-bet" / "sub-01.json"),
+           "log": str(tmp_path / "logs" / "fsl-bet" / "sub-01.log"),
+           "err": str(tmp_path / "logs" / "fsl-bet" / "sub-01.err"),
+           "work_dir": str(tmp_path / "state" / "work" / "fsl-bet" / "sub-01")}
+    plan = {"engine": "docker", "containers_dir": "c", "requirements_dir": None}
+    record = skullstrip.run_one(run, {**TOOL, "image": "i"}, plan)
+
+    assert record["status"] == "failed" and "tool: bad input" in record["error"]
+    assert not Path(run["work_dir"]).exists()
+    assert (tmp_path / "logs" / "fsl-bet" / "sub-01.log").read_text().endswith(
+        "# skullstrip-bench: failed in 0 s\n")
+    assert "skullstrip-bench: run failed: exit code 1" in Path(run["err"]).read_text()

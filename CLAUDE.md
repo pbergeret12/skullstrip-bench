@@ -8,6 +8,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 It is built on the [`invoke`](https://www.pyinvoke.org/) task runner and the `airoh` package of reusable invoke tasks, customized via `tasks.py` and `invoke.yaml` (an `airoh-mini` template project).
 
+## Writing style for user-facing docs
+
+README.md and the CONTENT.md files are written in plain prose. They use no emojis (one exception: the cup next to airoh in the README's introduction), no em dashes, no horizontal rules, and few bold words. The user finds those read as machine-written. Prefer sentences to bullet lists when the content is a description rather than a sequence of steps. Never add example scripts (`.sh`) to the repository: usage examples go in the README as code blocks.
+
 ## Persona
 
 Respond as Uncle Airoh: patient, warm, and wise. Assume the user may be new to coding. Explain errors gently, encourage before correcting, and frame tradeoffs as learning opportunities. When things get heated, offer a calming cup of jasmine tea.
@@ -25,13 +29,15 @@ External requirements: Docker (with its daemon running) **or** Apptainer. Contai
 ```bash
 # Every task that reads or writes results takes --output (default: output_data/).
 uv run invoke run-check --bids PATH --containers PATH [--requirements PATH] [--output PATH]
-                              # Check everything (shallow), write <output>/plan.json; runs nothing
+                              # Check everything (shallow), write the plan (hidden state); runs nothing
 uv run invoke run --bids PATH --containers PATH [--requirements PATH] [--output PATH] \
                   [--tools a,b] [--subjects 01,02] [--engine docker|apptainer]
                               # Full pipeline, locally (cached: skips runs already done)
-uv run invoke run … --scheduler slurm   # Write Slurm scripts in <output>/slurm/ instead of running
+uv run invoke run … --scheduler slurm   # Write Slurm scripts (hidden state) instead of running
 uv run invoke run … --force   # Clean everything first, then run from scratch
 uv run invoke prepare-images --containers PATH   # Build .sif files once (cluster login node)
+uv run invoke build-image     # The tool's own container: docker build + save → .tar
+apptainer run --bind … skullstrip-bench.sif run …   # Same tasks from the tool's .sif
 uv run invoke run-smoke --bids PATH --containers PATH   # 1 T1w × SynthStrip, end to end
 uv run invoke verify          # Check code, config, data and docs still agree
 uv run invoke clean           # Remove an output folder's computed contents
@@ -80,9 +86,24 @@ When results start looking stale or inconsistent, reach for `--force` rather tha
 
 ## Skullstrip Bench specifics
 
-**Validation is separate from processing.** `run-check` verifies everything up front and writes `<output>/plan.json`: the input paths, the engine, the scheduler, the participants (`subjects`), the usable tool configs, and one entry per (T1w × tool) run with every path it reads or writes already decided (`t1w`, `mask`, `record`, `log`, `work_dir`). `run-skullstrip` executes that plan blindly. Its code assumes valid inputs and must stay extremely simple: one `try`/`except` per run, no re-validation. A new check belongs in `run-check`, not in the processing code. The dataset check is **shallow on purpose** (folder layout only, no image opened) so it takes seconds on a huge dataset; a broken T1w just fails its own run. Without `--tools`, the tools are the images found in `--containers` that have a config in `tools/` and whose `requires` files are present; other images are reported "not compatible" and skipped. `run-check` and `run-metrics` are the deliberate exceptions to existence-based caching: both always re-run. `run-check` is cheap and must see a newly added tool or image. `run-metrics` takes seconds, and the consensus (hence every Dice) changes whenever a run is added, so a cached table would silently go stale.
+**The output folder shows only `report/` and `logs/`** (`analysis/layout.py` decides every path). The user asked for exactly this, so do not add visible outputs:
+- `report/` holds `report.html`, `figures/` and `metrics.csv`;
+- `logs/<tool>/<stem>.log` holds the container's stdout, after a `# command` line and before a final `# skullstrip-bench: <status>` line;
+- `.err` holds its stderr, plus the failure reason;
+- `logs/slurm/` holds the jobs' `.log`/`.err`.
 
-**The report** (`analysis/report.py`, `analysis/report_figures.py`, `analysis/report_template.html`) uses nilearn `plot_anat` plus `add_contours`, deliberately not niworkflows' `SimpleShowMaskRPT` (as in HALFpipe), whose nipype/templateflow stack can download templates. Slices are chosen from the T1w alone, so every tool is shown on the same slices. Each run's picture is drawn once and saved twice, as JPEG: a thumbnail for the grid (output_data/figures/TOOL/STEM.jpg) and a 300 dpi version (STEM_full.jpg, about 2 px per 1 mm voxel) that only the zoom viewer shows, with wheel zoom, drag, and arrow keys that move to the neighbouring cell at the same zoom and position. Both are cached and belong to their mask: `clean-skullstrip --tools x` removes it too. The HTML is rebuilt on every `run-report`. The template is filled by `string.Template`, so a literal dollar sign in it must be doubled. Its JavaScript is plain ES5 with no external resources, so the file works offline and can be shared alone.
+Everything internal lives in the hidden `.skullstrip-bench/`: plan, run records, masks, report and metrics parts, Slurm scripts, MANIFEST/PROVENANCE. Masks are kept there, not in the visible output, because a retried run or an added tool changes the consensus, so every Dice of that T1w has to be recomputed from all its masks. Raw tool outputs go to a scratch folder deleted at the end of each run.
+
+**Validation is separate from processing.** `run-check` verifies everything up front and writes the plan (`.skullstrip-bench/plan.json`): the input paths, the engine, the scheduler, the participants (`subjects`), the usable tool configs, and one entry per (T1w × tool) run with every path it reads or writes already decided (`t1w`, `mask`, `record`, `log`, `work_dir`). `run-skullstrip` executes that plan blindly. Its code assumes valid inputs and must stay extremely simple: one `try`/`except` per run, no re-validation. A new check belongs in `run-check`, not in the processing code. The dataset check is **shallow on purpose** (folder layout only, no image opened) so it takes seconds on a huge dataset; a broken T1w just fails its own run. Without `--tools`, the tools are the images found in `--containers` that have a config in `tools/` and whose `requires` files are present; other images are reported "not compatible" and skipped. `run-check` and `run-metrics` are the deliberate exceptions to existence-based caching: both always re-run. `run-check` is cheap and must see a newly added tool or image. `run-metrics` takes seconds, and the consensus (hence every Dice) changes whenever a run is added, so a cached table would silently go stale.
+
+**The report** (`analysis/report.py`, `analysis/report_figures.py`, `analysis/report_template.html`, `analysis/assemble.py`) uses nilearn `plot_anat` plus `add_contours`, deliberately not niworkflows' `SimpleShowMaskRPT` (as in HALFpipe), whose nipype/templateflow stack can download templates. Slices are chosen from the T1w alone, so every tool is shown on the same slices. Each run's picture is drawn once and saved twice, as JPEG: a thumbnail for the grid (output_data/figures/TOOL/STEM.jpg) and a 300 dpi version (STEM_full.jpg, about 2 px per 1 mm voxel) that only the zoom viewer shows, with wheel zoom, drag, and arrow keys that move to the neighbouring cell at the same zoom and position. Both are cached and belong to their mask: `clean-skullstrip --tools x` removes it too. The HTML is rebuilt on every `run-report`. The template is filled by `string.Template`, so a literal dollar sign in it must be doubled. Its JavaScript is plain ES5 with no external resources, so the file works offline and can be shared alone.
+
+**The report and the metrics are incremental.** The consensus only involves one T1w, so everything about a participant is computed in that participant's own job (`run-update --subjects X`). The job writes its parts — metrics_parts/SUBJECT.csv, and report_parts/SUBJECT.html with its pictures embedded — then rebuilds `metrics.csv` and `report.html` from every part present (`analysis/assemble.py`). Concurrent jobs are safe enough:
+- writes are atomic (temporary file, then rename), so an open report is never half-written;
+- after writing, the parts are listed again (names and modification times), and the file is rebuilt if anything changed meanwhile;
+- the final report job (`run-aggregate`) rebuilds everything.
+
+Locally, `run` goes participant by participant the same way. Only the plan's tools (`plan["tools"]`) appear in the report and enter the consensus, even if older runs of other tools sit in the output folder. Ratings are Good / Bad / Uncertain; they live in the browser's localStorage (key `skullstrip-bench-ratings`, per stem|tool), so they survive the report being rebuilt.
 
 **Metrics guide the eye, they do not judge.** The consensus is a voxel-wise majority vote (strictly more than half) of the tools that succeeded on a T1w. With only two tools it is their intersection, which favors the more conservative mask: read Dice with that in mind until more tools are in.
 
@@ -90,7 +111,17 @@ When results start looking stale or inconsistent, reach for `--force` rather tha
 
 **Adding a tool = one YAML in `tools/` + one image in the containers folder** (+ its files in the requirements folder, if any). Keys: `name` (must equal the file name), `image` (Docker reference), `container` (image file base name), `command` (the full command, with placeholders `{input}`, `{mask}`, `{output_prefix}`, `{requirements}`, `{threads}` resolved to container paths/values). Optional keys: `mask_output` (default `{mask}`), `postprocess` (`labels_to_mask`), `requires` (file names expected in `<requirements>/<name>/`, mounted read-only as `{requirements}`), `timeout_min`, and the cluster resources of one run: `cpus`, `mem_gb`, `minutes`. Nothing but YAML lives in `tools/`. The launcher caps threads in every container through `OMP_NUM_THREADS` and `ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS` (`--threads`, default `$SLURM_CPUS_PER_TASK`, else all cores). When the timeout runs out, the run is recorded as `timeout`. A Docker container is named so the launcher can `docker kill` it, because killing `docker run` alone leaves the container running in the VM. A dead Docker VM makes `docker run` hang rather than fail, which is what the timeout guards against. Do not write `${VAR}` in a command, since braces are placeholders; `$VAR` is expanded by the shell inside the container. The README's "Compatible containers" table must list every tool in `tools/`.
 
-**Running on a cluster: `run --scheduler slurm`** (`analysis/slurm.py`) runs only the check, then writes `<output>/slurm/`: `jobs.txt` (one participant per line, `sub-XX`), `skullstrip_array.sh` (array task N = participant on line N, every tool in sequence, then its report pictures via `run-figures`), `skullstrip_report.sh` (`run-aggregate`: metrics, report, provenance) and `submit.sh` (chains the report with `--dependency=afterany`, and refuses while `--account` is still `def-CHANGEME`). The user edits `--account` and `--array` (how many participants: a pilot `1-20`, all `1-N`, throttled `1-N%50`). Array resources: max `cpus`/`mem_gb` of the selected tools; walltime = (sum of per-tool minutes × the most T1w any participant has) × 1.5 + 10 min, rounded up to 15 min, where measured Apptainer durations in `<output>/runs/` replace the YAML `minutes`. In slurm mode the engine is always Apptainer, and every `.sif` must already exist (`prepare-images`, on a login node): array tasks must never build images concurrently. Tasks work on `$SLURM_TMPDIR` (`--work-root`) so only masks, logs and records reach the shared filesystem.
+**The tool's own container** (`Dockerfile`, `container/skullstrip-bench`, `invoke build-image`). Ubuntu 24.04, plus Apptainer 1.5.4 from its official release `.deb` (non-setuid), plus the `uv.lock` environment without dev tools, plus the code and `tools/`. The `VERSION` file is the git commit, and goes into `plan.json` as `skullstrip_bench_version`. The entry point is `invoke --search-root /opt/skullstrip-bench "$@"`, run from the caller's working directory. Running the tasks from it means **nested Apptainer** (the tool's container launches the tools' containers), which needs unprivileged user namespaces on the host. Rules that keep this working:
+- data folders are bound at the **same path** inside, so plan paths hold on both sides;
+- `tools/` is resolved from `PROJECT_DIR` (tasks.py's folder), never from the working directory;
+- `SKULLSTRIP_BENCH_IN_CONTAINER=1` tells `slurm.py` to call `apptainer exec --bind … $APPTAINER_CONTAINER skullstrip-bench` in the job scripts, instead of this checkout's invoke;
+- the tool's own image never goes in `--containers`.
+
+Usage examples for clusters (building the `.sif` files from Docker Hub digests on a login node, a one-job test on a compute node, generating and submitting the array) live in the README, section "Running with Apptainer and Slurm". They are not versioned as `.sh` files: the user does not want example scripts in the repository.
+
+**Build every download over https.** The dev Mac's institutional network stalls plain-http Ubuntu mirrors: 0 bytes in 60 s, while https answers in 1–3 s. The first build hung for over 20 minutes on `apt-get update`. The Dockerfile therefore switches apt sources to https, copies CA certificates from `buildpack-deps:noble-curl` (the base image has none), and fetches Apptainer's `.deb` with `ADD https://…`. Do not reintroduce `add-apt-repository` or `http://` sources. Typical build: about 3.5 min; image about 300 MB.
+
+**Running on a cluster: `run --scheduler slurm`** (`analysis/slurm.py`) runs only the check, then writes to `.skullstrip-bench/slurm/`: `jobs.txt` (one participant per line, `sub-XX`), `skullstrip_array.sh` (array task N = participant on line N, every tool in sequence, then `run-update` adds that participant to metrics and report), `skullstrip_report.sh` (`run-aggregate`: full rebuild, provenance) and `submit.sh` (chains the report with `--dependency=afterany`, and refuses while `--account` is still `def-CHANGEME`). `--slurm-account` and `--slurm-array` fill in `--account` and `--array` at generation, or the user edits them (how many participants: a pilot `1-20`, all `1-N`, throttled `1-N%50`). Array resources: max `cpus`/`mem_gb` of the selected tools; walltime = (sum of per-tool minutes × the most T1w any participant has) × 1.5 + 10 min, rounded up to 15 min, where measured Apptainer durations in `<output>/runs/` replace the YAML `minutes`. In slurm mode the engine is always Apptainer, and every `.sif` must already exist (`prepare-images`, on a login node): array tasks must never build images concurrently. Tasks work on `$SLURM_TMPDIR` (`--work-root`) so only masks, logs and records reach the shared filesystem.
 
 **Tool-specific notes.**
 - SynthSeg outputs a segmentation: `labels_to_mask` (`analysis/postprocess.py`) keeps label > 0, CSF included as in SynthStrip's default, then resamples it nearest-neighbour onto the T1w grid.
@@ -113,7 +144,11 @@ When results start looking stale or inconsistent, reach for `--force` rather tha
   - `container_requirements/<tool>/` with `requires:`;
   - `{threads}`, and the Slurm mode.
 - The Slurm mode was tested locally only: script generation, `bash -n`, the `submit.sh` guard, and a simulated array task under Docker with fake `SLURM_*` variables.
-- **Neither Apptainer nor Slurm has run for real yet.**
+- The tool's own container exists (`Dockerfile`, `build-image`). The cluster usage examples are in the README.
+- **Apptainer has run for real (2026-10-07)**, inside the tool's container, with Docker `--privileged` as the outer container: it built `synthstrip_1.8.sif` from the `.tar` and processed sub-10159 in 42 s. The mask was identical voxel for voxel to the Docker one (1483.5 mL).
+  - Apptainer refuses an `APPTAINER_TMPDIR` on a path shared from the Mac ("no parent mount point"). Use a container-local or node-local folder.
+- The report is incremental, with Good / Bad / Uncertain ratings.
+- **Nested Apptainer (Apptainer in Apptainer, unprivileged) and Slurm have not run on a real cluster yet.**
 
 **Local testing uses only the fast tools.** On the dev Mac, run SynthStrip and FSL BET only (`--tools synthstrip,fsl-bet`). Never launch SynthSeg or ANTs locally again: they are validated, and they are slow and memory-hungry under emulation. To test Slurm generation without `.sif` files, point `--containers` at a scratch folder of empty `<name>.sif` files: the check only tests that they exist.
 
@@ -123,8 +158,10 @@ When results start looking stale or inconsistent, reach for `--force` rather tha
 - requirements: `/Users/pierrebergeret/Documents/TRAVAIL_DOCTORAT/containers/container_requirements` (holds `ants/` with the three OASIS files).
 
 **Next.**
-1. **Apptainer for real**, in a Lima VM or on the cluster: `prepare-images`, then a local Apptainer run of the fast tools.
-2. **Cluster pilot**: `--scheduler slurm`, `--array=1-20`, then `seff` for real memory and time. Regenerate afterwards: the measured durations replace the YAML estimates.
+1. **Cluster pilot with the tool's container**: build `skullstrip-bench.sif`, run the README's test job, then `--scheduler slurm --slurm-array 1-20` with the fast tools, then use `seff` for real memory and time.
+   - First check that nested Apptainer works on the compute nodes. If it does not, fall back to a Python checkout on the cluster (`uv sync`).
+   - Regenerate afterwards: the measured durations replace the YAML estimates.
+2. If nested Apptainer works: try SynthSeg and ANTs on the pilot too.
 3. **Report for large datasets.** One self-contained HTML is about 5 MB per participant with 4 tools, so it cannot scale to thousands. Paginate (e.g. 20–50 participants per page plus an index), and probably put suspicious cases first (implausible volume, low Dice, failures).
 4. Possibly: `clean-skullstrip --subjects`, and a `--retry-failed` option in the generated array script.
 

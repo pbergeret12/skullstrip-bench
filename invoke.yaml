@@ -26,12 +26,12 @@ report:
 
 # provenance records
 #
-# Written into the output folder: MANIFEST.json by `run-check` (what each
-# input path resolved to, with its git commit when it is a repository) and
-# PROVENANCE.json by `run` (what produced the outputs). These are the
-# defaults for --output output_data; both are git-tracked there.
-manifest_file: output_data/MANIFEST.json
-provenance_file: output_data/PROVENANCE.json
+# Written into the output's hidden .skullstrip-bench/ folder: MANIFEST.json by
+# `run-check` (what each input path resolved to, with its git commit when it
+# is a repository) and PROVENANCE.json by `run` (what produced the outputs).
+# These are the defaults for --output output_data; both are git-tracked there.
+manifest_file: output_data/.skullstrip-bench/MANIFEST.json
+provenance_file: output_data/.skullstrip-bench/PROVENANCE.json
 # Files above this size record their metadata but no checksum.
 provenance_hash_max_bytes: 104857600
 
@@ -51,5 +51,10 @@ verify:
     - "MICCAI2012-Multi-Atlas-Challenge-Data"   # folder inside ANTs' Oasis.zip
     - "jobs.txt"            # written only by --scheduler slurm, under <output>/slurm/
     - "slurm"
+    - "report/*"            # paths inside the user's --output folder
+    - "logs/*"
+    - ".skullstrip-bench/*"
+    - "dataset_description.json"   # lives in the user's BIDS dataset
+    - "ants"                # a subfolder of the user's requirements folder
   # Largest file git may track before the check fails (default 10 MB).
   max_tracked_bytes: 10485760

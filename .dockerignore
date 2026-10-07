@@ -1,0 +1,10 @@
+# Only code and tool configs go into the image (see Dockerfile).
+*
+!pyproject.toml
+!uv.lock
+!tasks.py
+!invoke.yaml
+!analysis/
+!tools/
+!container/
+**/__pycache__

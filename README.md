@@ -1,172 +1,178 @@
 # Skullstrip Bench
 
-_why don't you have a cup of relaxing jasmine tea?_
-
 Skullstrip Bench runs several containerized skull-stripping tools (SynthStrip, FSL BET, SynthSeg, ANTs) on every T1w image of a BIDS dataset, then builds a self-contained HTML report in which you rate each brain mask. There is no ground truth: the final call is yours, and the metrics (mask volume, Dice against the consensus of all tools, runtime) are only there to guide the eye.
 
-Two goals drive the design:
-- **No setup and no downloads, ever.** The tool runs the container images you already have, reads your files where they are, and never touches the network. That is what lets it run on cluster compute nodes without internet access, such as the Digital Research Alliance of Canada's.
-- **Processing code that stays easy to read.**
+The tool never downloads anything. It runs the container images you already have and reads your files where they are, which is what lets it run on cluster compute nodes without internet access, such as those of the Digital Research Alliance of Canada. It runs locally with Docker or Apptainer, or on a Slurm cluster, where it writes job scripts with one array task per participant.
 
-It runs **locally** (Docker or Apptainer), or **on a Slurm cluster**: in that mode it writes ready-to-edit job scripts, one array task per participant.
+The project was built from the `airoh-mini` template. [airoh](https://github.com/SIMEXP/airoh) 🍵 is a small Python package of reusable [invoke](https://www.pyinvoke.org/) tasks for reproducible analyses, developed at SIMEXP. The template gives every project the same shape: a `tasks.py` holding the pipeline steps as invoke tasks, an `invoke.yaml` for paths and settings, `source_data/` for inputs and `output_data/` for results, provenance records written at each run, and a `verify` task that checks the code, the configuration and the documentation still agree. Its name is a nod to Uncle Iroh, from *Avatar: The Last Airbender*, and his love of tea.
 
-Built on the [`invoke`](https://www.pyinvoke.org/) task runner and [`airoh`](https://pypi.org/project/airoh/) (from the `airoh-mini` template).
+Status: built during BrainHack School. All four tools work end to end under Docker, and the tool's own container has run Apptainer successfully. The Slurm mode and nested Apptainer have not run on a real cluster yet.
 
-⚠️ **Status**: built during BrainHack School. All four tools work end to end under Docker. The Slurm mode is written and tested locally, but has not run on a real cluster yet, and Apptainer runs are still untested.
+## Quick start
 
----
-
-## ✨ TL;DR
+Install the Python environment with [uv](https://docs.astral.sh/uv/), which also installs the dev tools (flake8, pytest). You also need a container engine, Docker with its daemon running or Apptainer. Apptainer is used if available, otherwise Docker, and `--engine docker` forces one.
 
 ```bash
 uv sync
 uv run invoke run --bids /path/to/bids --containers /path/to/images \
                   --requirements /path/to/container_requirements --output /path/to/results
-# → /path/to/results/report.html
 ```
 
-On a cluster, add `--scheduler slurm`, then edit and submit the generated scripts (see [Running on a Slurm cluster](#-running-on-a-slurm-cluster)).
-
----
-
-## 🚀 Quick Start
-
-### Step 1: Install
-
-```bash
-uv sync
-```
-
-This creates a `.venv` with the runtime dependencies plus the dev tools (`flake8`, `pytest`). You also need a container engine: **Docker** (daemon running) or **Apptainer**. Apptainer is used if available, otherwise Docker; force one with `--engine docker`.
-
-### Step 2: Gather three folders
+The four folders are read in place, nothing is copied or linked:
 
 | Flag | What it points to |
 | ---- | ----------------- |
-| `--bids` | Your **BIDS dataset**. Only `dataset_description.json` and the T1w images in each subject's anat folder (sessions allowed) are read. |
-| `--containers` | A folder holding **only container images**: Docker archives `<name>.tar` (from `docker save`) and/or Apptainer `<name>.sif`. File names must match the table in [Compatible containers](#-compatible-containers). |
-| `--requirements` | Only for tools that need extra files (ANTs, today): **one subfolder per tool** holding its atlases, templates or configs, e.g. `container_requirements/ants/`. |
-| `--output` | Where every result goes (default: `output_data/` in this repository). Use one output folder per dataset. |
+| `--bids` | The BIDS dataset. Only `dataset_description.json` and the T1w images in each subject's anat folder (sessions allowed) are read. |
+| `--containers` | A folder holding only container images: Docker archives `<name>.tar` (from `docker save`) and/or Apptainer `<name>.sif`, named as in [Compatible containers](#compatible-containers). |
+| `--requirements` | Only for tools that need extra files (ANTs, today): one subfolder per tool holding its atlases, templates or configs, for example `container_requirements/ants/`. |
+| `--output` | Where every result goes (default `output_data/` in this repository). Use one output folder per dataset. |
 
-Nothing is copied or linked: the folders are read in place. To avoid retyping the paths on one machine, set defaults under `inputs:` in `invoke.yaml`.
+To avoid retyping the paths on one machine, set defaults under `inputs:` in `invoke.yaml`.
 
-### Step 3: Check, then run
+`run` first runs `run-check`, which launches nothing and takes seconds whatever the dataset size. The dataset check is shallow: it looks for `dataset_description.json`, the `sub-*` folders and the T1w files, and never opens an image, so a broken T1w simply fails its own run. Without `--tools`, every image in `--containers` that has a config in `tools/` and whose required files are in `--requirements` is used, and the other images are reported as not compatible. `--tools synthstrip,fsl-bet` restricts the tools and `--subjects 10159,10171` the participants.
 
-```bash
-uv run invoke run-check --bids … --containers … --requirements … --output …
+Then each participant is processed in turn. A run fails, is recorded, and the next one starts when the tool errors, runs out of memory, exceeds the tool's `timeout_min`, or produces a mask that is missing, not binary or off the T1w grid.
+
+The output folder holds only what you need to look at:
+
+```
+<output>/
+  report/report.html           the report
+  report/figures/              its pictures, a thumbnail and a full-size version per run
+  report/metrics.csv           volume, Dice, duration and status of each run
+  logs/<tool>/<stem>.log       what the tool printed, after a first line with the exact command
+  logs/<tool>/<stem>.err       its errors, ending with why the run failed if it did
+  logs/slurm/                  the cluster jobs' .log and .err
 ```
 
-`run-check` launches nothing and takes seconds, whatever the dataset size. It checks:
-- **the dataset, shallowly**: `dataset_description.json`, the `sub-*` folders, and T1w files where BIDS puts them. It never opens an image: a broken T1w simply fails its own run.
-- **the tools**: without `--tools`, every image in `--containers` that has a config in `tools/` and whose required files are in `--requirements` is used. Other images are reported as *not compatible* and skipped. With `--tools synthstrip,fsl-bet`, only those.
-- **the engine** and **the output folder**.
+Everything the tool keeps for itself lives in the hidden folder `<output>/.skullstrip-bench/`: the plan, the record of each run (which is how a repeated `run` knows what is already done), the masks (needed to recompute the Dice when a run is retried or a tool added), the parts of the incremental report, the generated Slurm scripts and the provenance records. The raw files each tool writes are deleted at the end of its run.
 
-It then prints a ✔/✘ summary and writes the run plan to `<output>/plan.json`. Restrict it further with `--subjects 10159,10171`.
+Every step skips work whose output already exists, so `run` is cheap to repeat. Failed runs count as done too, so a slow tool that crashed is not relaunched every time: retry them with `uv run invoke run-skullstrip --output … --retry-failed`, or redo one tool with `uv run invoke clean-skullstrip --output … --tools fsl-bet`. The other side of this is that editing the code does not re-run anything; `run … --force` cleans the output folder and starts over.
 
-```bash
-uv run invoke run --bids … --containers … --requirements … --output …   # check → runs → report
-uv run invoke run … --force                                            # clean, then run from scratch
-```
+## Judging the masks
 
-Each (T1w × tool) run writes a BIDS-derivative mask, its container log, and a record of its status and duration. A run that fails is recorded and the next one starts. A run fails when:
-- the tool itself errors;
-- it runs out of memory;
-- it runs longer than the tool's `timeout_min`;
-- its mask is missing, not binary, or off the T1w grid.
+Open `report/report.html` in the output folder. The report is incremental: each participant is added as soon as its runs are done, so you can open it at any time, and reload it to see the participants finished since. The header says how many participants are processed.
 
-Every step skips work whose output already exists, so `invoke run` is cheap to repeat. Failed runs count as done too, so a slow tool that crashed is not relaunched every time. To redo runs:
-- retry the failed ones with `uv run invoke run-skullstrip --output … --retry-failed`;
-- redo one tool with `uv run invoke clean-skullstrip --output … --tools fsl-bet`.
+There is one row per T1w and one column per tool. Each cell shows the T1w with the mask's outline in red, in axial, coronal and sagittal views, with the same slices for every tool. Clicking a picture opens a high-resolution version: zoom with the mouse wheel, drag to move, and use the arrow keys to switch to another tool (left, right) or T1w (up, down) at the same zoom and position. Under each picture are the mask volume, highlighted outside the plausible range set in `invoke.yaml` (`report: plausible_volume_ml`, 1100 to 1600 mL by default), the Dice against the consensus of the tools, and the runtime. A failed run shows its error instead.
 
-The flip side: editing a script does **not** re-run anything. Use `--force`, or a `clean-{name}` task, to rebuild.
+Rate each mask Good, Bad or Uncertain, add a comment if needed, then use Export ratings (CSV). Ratings are kept in your browser across reloads, including while the report keeps growing, but the CSV export is your real record.
 
-### Step 4: Judge the masks
+The file is self-contained (images embedded) and can be sent as is. It shows participants' brains, though, so share it only where the dataset's rules allow.
 
-Open **`<output>/report.html`** in a browser. It has one row per T1w and one column per tool. Each cell shows the T1w with the mask's outline in red, in axial, coronal and sagittal views, with the same slices for every tool.
+## Running with Apptainer and Slurm
 
-Click a picture to open its high-resolution version:
-- zoom with the mouse wheel and drag to move;
-- use the arrow keys to switch to another tool (← →) or T1w (↑ ↓) **at the same zoom and position**.
+On a cluster you need neither Python nor this repository: the tool ships as one image, `skullstrip-bench.sif`, holding the Python environment, the code, the tool configs and Apptainer itself, so that it can launch the skull-stripping containers from inside (Apptainer nested in Apptainer). Every task works as with `uv run invoke`, provided the folders it reads or writes are bound into the container at the same path. The tool's own image never goes in `--containers`, which only holds the images it runs.
 
-Under each picture:
-- the mask volume, highlighted outside the plausible range set in `invoke.yaml` (`report: plausible_volume_ml`, 1100–1600 mL by default);
-- the Dice against the consensus of the tools;
-- the runtime.
+Nested Apptainer requires unprivileged user namespaces on the compute nodes, which is how current Apptainer installations without setuid work. If a cluster refuses it, run the tool from a Python environment on the cluster instead (`uv sync`, then `uv run invoke …`); everything else stays the same.
 
-A failed run shows its error instead. Rate each mask **OK / Fail / Doubtful**, add a comment, then use **Export notes (CSV)**. Notes are kept in your browser between reloads, but the CSV export is your real record.
+### Preparing the images
 
-The file is self-contained (images embedded), so you can send it as is. It shows participants' brains, though, so share it only where the dataset's rules allow.
-
-### Step 5: Smoke test and consistency checks
+Build the tool's image on a machine with Docker and internet access, from this repository. This gives `skullstrip-bench_<version>.tar` (about 300 MB), where the version is the git commit. The build takes a few minutes and downloads everything over https, because some institutional networks stall plain-http Ubuntu mirrors.
 
 ```bash
-uv run invoke run-smoke --bids … --containers …   # 1 T1w × SynthStrip, end to end
-uv run invoke verify                              # code, config, data and docs still agree
-uv run pytest                                     # unit tests
-uv run flake8                                     # linter
+uv run invoke build-image --output-dir /path/to/folder
 ```
 
----
-
-## 🖥️ Running on a Slurm cluster
-
-On the cluster, nothing is computed at generation time: the tool writes job scripts that you read, edit and submit.
-
-1. **Copy the images once** (the `.tar` files, or `.sif` you already built) and the requirements folder to the cluster. Compute nodes have no internet, and the tool never downloads anything.
-2. **Build the `.sif` files once**, on a login node or in an interactive job:
-   ```bash
-   module load apptainer
-   uv run invoke prepare-images --containers /path/to/images
-   ```
-   Each `<name>.sif` is built from its `<name>.tar`, next to it. Array tasks only read them, so they never race to build the same image.
-3. **Generate the scripts:**
-   ```bash
-   uv run invoke run --scheduler slurm --bids … --containers … --requirements … --output $SCRATCH/results
-   ```
-   This writes to `<output>/slurm/`:
-
-   | File | Content |
-   | ---- | ------- |
-   | `jobs.txt` | One participant per line (`sub-XX`). Array task N processes line N. |
-   | `skullstrip_array.sh` | The job array. One task = one participant: every selected tool on all of that participant's T1w images, working on the node's local disk (`$SLURM_TMPDIR`), with the threads Slurm granted, then that participant's report pictures. |
-   | `skullstrip_report.sh` | Metrics, report and provenance, once the array has ended. |
-   | `submit.sh` | Submits the array, then the report job with `--dependency=afterany`. It refuses to submit until `--account` is edited. |
-
-   The array's resources are pre-filled for one participant:
-   - **CPUs and memory**: the largest of the selected tools, since they run one after the other.
-   - **Time**: the sum of the tools' durations × 1.5 + 10 min. Durations come from each tool's YAML, or from durations already measured with Apptainer in that output folder.
-4. **Edit, then submit:**
-   - replace `def-CHANGEME` with your allocation (e.g. `def-yourpi`) in both `.sh` files;
-   - choose how many participants to launch with `#SBATCH --array`: `1-20` for a pilot on the first 20, `1-N` for all, `1-N%50` for all with at most 50 at once;
-   - then run `<output>/slurm/submit.sh`.
-5. **After a pilot**, re-run the same `--scheduler slurm` command: the measured durations replace the estimates, so the walltime fits your cluster. Check the real memory peak with `seff <jobid>`.
-
----
-
-## 📦 Compatible containers
-
-A container is compatible when `tools/` has a config for it. For it to run, its image must sit in `--containers` under the file name below, and its required files (if any) must be in `--requirements`. Prepare each image once, on a machine with internet:
+Copy that archive to the cluster. The skull-stripping images themselves do not need to travel through your own connection: build them directly on a login node, which has internet access, from Docker Hub. The digests pin the exact images this project was tested with, and the file names are how the tool recognizes each image. Run this inside `tmux`, so that it survives a dropped SSH connection.
 
 ```bash
-docker pull <image> && docker save -o <file name>.tar <image>
+module load apptainer
+# Temporary files and cache on $SCRATCH: $HOME has a small quota.
+export APPTAINER_TMPDIR=$SCRATCH/apptainer_tmp APPTAINER_CACHEDIR=$SCRATCH/apptainer_cache
+mkdir -p $APPTAINER_TMPDIR $APPTAINER_CACHEDIR $SCRATCH/containers
+cd $SCRATCH/containers
+
+apptainer build skullstrip-bench.sif docker-archive://$SCRATCH/skullstrip-bench_<version>.tar
+apptainer build synthstrip_1.8.sif     docker://freesurfer/synthstrip@sha256:ebbc177221194371f16362513ace68312a22922bb581bdfa618ac7ff9c1d2c06
+apptainer build fsl_6.0.7.22.sif       docker://gamorosino/fsl@sha256:e17b13fe4af7ec79643595bb2de16584193234b99cb2fafbd7c786a1dc8b8d43
+apptainer build synthseg_conda-0.2.sif docker://cookpa/synthseg@sha256:4c632dd3c7591e72b4b87357449e50cc96cc29cef92326db879264be107dd4c9
+apptainer build ants_latest.sif        docker://antsx/ants@sha256:59c45f54a1f1dc69134f63bec91a726e41c71c64a16cc21cda0b54526910a3c3
 ```
 
-| Tool | Image | File name in `--containers` | Required files in `--requirements` | Output | Runtime per T1w (Mac, amd64 emulation) | Cluster resources (YAML) |
-| ---- | ----- | --------------------------- | --------------------------------- | ------ | -------------------------------------- | ------------------------ |
-| `synthstrip` | `freesurfer/synthstrip:1.8` | `synthstrip_1.8.tar` / `.sif` | — | brain mask (CSF included) | ≈ 17 s | 4 CPUs, 8 GB |
-| `fsl-bet` | `gamorosino/fsl:6.0.7.22` | `fsl_6.0.7.22.tar` / `.sif` | — | brain mask (`bet -m -R`) | ≈ 8 s | 1 CPU, 2 GB |
-| `synthseg` | `cookpa/synthseg:conda-0.2` | `synthseg_conda-0.2.tar` / `.sif` | — | segmentation → mask: every label > 0 (CSF included), resampled onto the T1w grid | 3–5 min | 8 CPUs, 16 GB |
-| `ants` | `antsx/ants:latest` | `ants_latest.tar` / `.sif` | `ants/T_template0.nii.gz`, `ants/T_template0_BrainCerebellumProbabilityMask.nii.gz`, `ants/T_template0_BrainCerebellumRegistrationMask.nii.gz` | `antsBrainExtraction.sh` mask | ≈ 6.5 min | 8 CPUs, 8 GB |
+Keep `skullstrip-bench.sif` out of the folder you will pass as `--containers` (move it one level up, for instance). If Docker Hub answers "toomanyrequests" (login nodes share one address), retry later or log in with `apptainer remote login --username <you> docker://docker.io`. Images you already have as `.tar` archives convert the same way, with `docker-archive://path/to/<name>.tar`.
 
-Notes:
-- **ANTs template**: the three files come from the OASIS template in the ANTs templates on figshare ([doi:10.6084/m9.figshare.915436](https://doi.org/10.6084/m9.figshare.915436), file `Oasis.zip`, folder `MICCAI2012-Multi-Atlas-Challenge-Data/`). Download it once on a machine with internet, and copy only those three files into `container_requirements/ants/`.
-- **SynthSeg memory**: under Docker on a Mac, give the Docker VM at least 12 GB. With 8 GB, the VM crashed.
-- **Free disk space**: also check it before long Docker runs. A full disk is what crashed Docker during development.
-- **The runtimes** were measured under amd64 emulation on an Apple Silicon Mac. Expect faster runs natively.
+### Testing on a compute node
+
+Before a real run, one small job checks on a compute node that the tool's container runs, that nested Apptainer works there, and that two participants go through end to end with the two fast tools. Save it as `test_skullstrip_bench.sh`, fill in the paths and the account, then `sbatch test_skullstrip_bench.sh`.
+
+```bash
+#!/bin/bash
+#SBATCH --account=def-yourpi
+#SBATCH --job-name=skullstrip-bench-test
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=8G
+#SBATCH --time=01:00:00
+#SBATCH --output=skullstrip-bench-test_%j.log
+#SBATCH --error=skullstrip-bench-test_%j.err
+set -euo pipefail
+
+TOOL_SIF=/path/to/skullstrip-bench.sif
+BIDS=/path/to/bids_dataset
+CONTAINERS=/path/to/containers          # holds synthstrip_1.8.sif and fsl_6.0.7.22.sif
+OUTPUT=$SCRATCH/skullstrip_bench_test
+SUBJECTS=10159,10171                    # two participants of the dataset
+
+module load apptainer
+export APPTAINER_TMPDIR=$SLURM_TMPDIR
+mkdir -p "$OUTPUT"
+binds="$BIDS,$CONTAINERS,$OUTPUT,$SLURM_TMPDIR"
+
+echo "Tool version: $(apptainer exec "$TOOL_SIF" cat /opt/skullstrip-bench/VERSION)"
+
+echo "Nested Apptainer check:"
+apptainer exec --bind "$binds" "$TOOL_SIF" \
+    apptainer exec "$CONTAINERS/synthstrip_1.8.sif" mri_synthstrip --help | head -3
+
+apptainer run --bind "$binds" "$TOOL_SIF" run \
+    --bids "$BIDS" --containers "$CONTAINERS" --output "$OUTPUT" \
+    --tools synthstrip,fsl-bet --subjects "$SUBJECTS"
+```
+
+If the nested check fails, the job stops there (`set -e`) and its output shows Apptainer's message, which is what to send to the cluster's support. Otherwise the report in the output folder holds the two participants.
+
+### Running a whole dataset
+
+On a login node, the same image writes the job scripts without computing anything, then a single command submits them:
+
+```bash
+module load apptainer
+apptainer run --bind /path/bids,/path/containers,$SCRATCH/results skullstrip-bench.sif run \
+    --scheduler slurm --bids /path/bids --containers /path/containers --output $SCRATCH/results \
+    --tools synthstrip,fsl-bet --slurm-account def-yourpi --slurm-array 1-20
+$SCRATCH/results/.skullstrip-bench/slurm/submit.sh
+```
+
+Add `--requirements /path/container_requirements` (and bind it) when ANTs is among the tools. This writes the following to the hidden `.skullstrip-bench/slurm/` folder, and the command prints the exact path of `submit.sh`. The jobs' own `.log` and `.err` go to `logs/slurm/`.
+
+| File | Content |
+| ---- | ------- |
+| `jobs.txt` | One participant per line (`sub-XX`). Array task N processes line N. |
+| `skullstrip_array.sh` | The job array. One task is one participant: every selected tool on all of that participant's T1w images, working on the node's local disk (`$SLURM_TMPDIR`) with the threads Slurm granted, after which the participant is added to the report and the metrics right away. |
+| `skullstrip_report.sh` | A final rebuild of metrics and report, plus the provenance record, once the array has ended. |
+| `submit.sh` | Submits the array, then the report job with `--dependency=afterany`. It refuses to submit while the account is still `def-CHANGEME`. |
+
+`--slurm-array` chooses which lines of `jobs.txt` run: `1-20` for a pilot on the first 20 participants, `1-N` for all of them (the default), `1-N%50` for all with at most 50 at once. `--slurm-account` sets the allocation; both can also be edited in the scripts before submitting. The resources of one array task are filled in from the selected tools: the largest CPU and memory needs, since the tools run one after the other, and a walltime of the sum of their durations × 1.5 + 10 min. Durations come from each tool's YAML, or from durations already measured with Apptainer in that output folder, so after a pilot, generating the scripts again gives walltimes that fit the cluster. `seff <jobid>` shows the real memory peak.
+
+## Compatible containers
+
+A container is compatible when `tools/` has a config for it. To run, its image must sit in `--containers` under the file name below, and its required files, if any, must be in `--requirements`.
+
+| Tool | Image | File name in `--containers` | Required files in `--requirements` | Output | Runtime per T1w (Mac, amd64 emulation) | Cluster resources |
+| ---- | ----- | --------------------------- | --------------------------------- | ------ | -------------------------------------- | ----------------- |
+| `synthstrip` | `freesurfer/synthstrip:1.8` | `synthstrip_1.8.tar` or `.sif` | none | brain mask (CSF included) | about 17 s | 4 CPUs, 8 GB |
+| `fsl-bet` | `gamorosino/fsl:6.0.7.22` | `fsl_6.0.7.22.tar` or `.sif` | none | brain mask (`bet -m -R`) | about 8 s | 1 CPU, 2 GB |
+| `synthseg` | `cookpa/synthseg:conda-0.2` | `synthseg_conda-0.2.tar` or `.sif` | none | segmentation turned into a mask: every label above 0 (CSF included), resampled onto the T1w grid | 3 to 5 min | 8 CPUs, 16 GB |
+| `ants` | `antsx/ants:latest` | `ants_latest.tar` or `.sif` | `ants/T_template0.nii.gz`, `ants/T_template0_BrainCerebellumProbabilityMask.nii.gz`, `ants/T_template0_BrainCerebellumRegistrationMask.nii.gz` | `antsBrainExtraction.sh` mask | about 6.5 min | 8 CPUs, 8 GB |
+
+On a machine with Docker, an image becomes a `.tar` with `docker pull <image> && docker save -o <file name>.tar <image>`; on a cluster, build the `.sif` directly as shown in [Preparing the images](#preparing-the-images).
+
+The three ANTs files come from the OASIS template among the ANTs templates on figshare ([doi:10.6084/m9.figshare.915436](https://doi.org/10.6084/m9.figshare.915436), file `Oasis.zip`, folder `MICCAI2012-Multi-Atlas-Challenge-Data/`). Download it once and copy only those three files into `container_requirements/ants/`.
+
+Under Docker on a Mac, SynthSeg needs at least 12 GB for the Docker virtual machine (it crashed with 8 GB), and long runs need free disk space: a full disk crashed Docker during development. The runtimes above were measured under amd64 emulation on an Apple Silicon Mac and are faster natively.
 
 ### Adding a tool
 
-One YAML in `tools/` plus one image in the containers folder (and its files in the requirements folder, if any):
+A tool is one YAML in `tools/` plus one image in the containers folder, and its files in the requirements folder if it needs any:
 
 ```yaml
 # tools/mytool.yaml
@@ -183,67 +189,45 @@ mem_gb: 8
 minutes: 5                          # expected duration on a cluster node
 ```
 
-The tool sees paths inside the container through these placeholders:
+Inside the container, `{input}` is the T1w, `{mask}` where to write the mask, `{output_prefix}` a prefix for tools that name their own outputs, `{requirements}` the tool's requirements subfolder (read-only) and `{threads}` the number of cores it may use. The launcher also sets `OMP_NUM_THREADS` and `ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS`, so that a tool never grabs every core of a shared node. Do not write `${VAR}` in a command, since braces are placeholders here; `$VAR` works.
 
-| Placeholder | Meaning |
-| ----------- | ------- |
-| `{input}` | the T1w |
-| `{mask}` | where to write the mask |
-| `{output_prefix}` | a prefix for tools that name their own outputs |
-| `{requirements}` | its requirements subfolder, read-only |
-| `{threads}` | the cores it may use |
-
-The launcher also sets `OMP_NUM_THREADS` and `ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS`, so a tool never grabs every core of a shared node. Do not write `${VAR}` in a command, because braces are placeholders here; `$VAR` works.
-
----
-
-## 🧰 Task Overview
+## Tasks
 
 | Task               | Description |
 | ------------------ | ----------- |
-| `run`              | Full pipeline: check → runs → figures → metrics → report. `--scheduler slurm` writes job scripts instead of running; `--force` cleans first |
-| `run-check`        | Checks dataset (shallow), tools, images, requirements, engine and output without running anything; writes `<output>/plan.json` and `MANIFEST.json`; always re-runs |
-| `run-skullstrip`   | Executes the plan, one container run per (T1w × tool); `--subjects`, `--tools`, `--retry-failed`, `--threads`, `--work-root` |
-| `run-figures`      | Draws the report pictures of finished runs (cached); a cluster array task draws its own participant's |
-| `run-metrics`      | Writes `<output>/metrics.csv`: volume, Dice against the consensus, duration and status per run; always re-runs |
-| `run-report`       | Writes `<output>/report.html`: masks drawn on the T1w, metrics, rating buttons and CSV export; the HTML is always rebuilt |
-| `run-aggregate`    | Metrics, report and provenance record: the end of `run`, and the cluster report job |
-| `run-smoke`        | Fast end-to-end pass: 1 T1w × SynthStrip, run locally |
-| `prepare-images`   | Builds each tool's Apptainer `.sif` from its `.tar`, once (run on a login node before `--scheduler slurm`) |
-| `verify`           | Checks that code, config, data and docs still agree |
-| `clean`            | Removes all computed outputs of an output folder |
-| `clean-check`      | Removes `plan.json` and `MANIFEST.json` |
-| `clean-skullstrip` | Removes masks, run records, logs, work folders and their report pictures; `--tools` limits it to some tools |
-| `clean-metrics`    | Removes `metrics.csv` |
-| `clean-report`     | Removes the report and its cached pictures |
-| `clean-slurm`      | Removes the generated Slurm files and job logs |
+| `run`              | The whole pipeline: the check, then participant by participant the runs and the update of metrics and report. With `--scheduler slurm` it writes job scripts instead (`--slurm-account`, `--slurm-array`); `--force` cleans first. |
+| `run-check`        | Checks the dataset (shallow), tools, images, requirements, engine and output without running anything, and writes the plan and the input record (hidden state). Always re-runs. |
+| `run-skullstrip`   | Executes the plan, one container run per (T1w × tool); `--subjects`, `--tools`, `--retry-failed`, `--threads`, `--work-root`. |
+| `run-metrics`      | Updates `report/metrics.csv` (volume, Dice against the consensus, duration and status of each run) for `--subjects` (default all), from per-participant parts. Always re-runs. |
+| `run-report`       | Updates `report/report.html` for `--subjects` (default all): draws their missing pictures, rewrites their rows and rebuilds the page from per-participant parts. |
+| `run-update`       | `run-metrics` then `run-report` for some participants, which is what each participant's job runs when it is done. |
+| `run-aggregate`    | Rebuilds metrics and report for every participant, then the provenance record. It is the cluster report job. |
+| `run-smoke`        | A fast end-to-end pass: one T1w with SynthStrip, run locally. |
+| `build-image`      | Builds the tool's own container (`docker build` and `docker save` into `skullstrip-bench_<version>.tar`) on a machine with internet. |
+| `prepare-images`   | Builds each tool's Apptainer `.sif` from its `.tar`, from a Python checkout. |
+| `verify`           | Checks that code, configuration, data and documentation still agree. |
+| `clean`            | Removes all computed outputs of an output folder. |
+| `clean-check`      | Removes the plan and the input record. |
+| `clean-skullstrip` | Removes the runs' logs, masks and records and their report pictures; `--tools` limits it to some tools. |
+| `clean-metrics`    | Removes `metrics.csv` and its parts. |
+| `clean-report`     | Removes the report, its parts and its pictures. |
+| `clean-slurm`      | Removes the generated Slurm scripts and the jobs' logs. |
 
-Every task that reads or writes results takes `--output` (default: `output_data/`). Use `uv run invoke --list` or `uv run invoke --help <task>` for details.
+Every task that reads or writes results takes `--output` (default `output_data/`). `uv run invoke --list` and `uv run invoke --help <task>` give the details. The checks used during development are `uv run invoke run-smoke --bids … --containers …`, `uv run invoke verify`, `uv run pytest` and `uv run flake8`.
 
----
+## Folder structure
 
-## 📁 Folder Structure
-
-| Folder / File  | Description |
+| Folder or file | Description |
 | -------------- | ----------- |
-| `analysis/`    | Processing code called by the tasks: BIDS parsing, mask validation, tool configs, the container launcher (the only engine-aware module), the checks, the Slurm script writer, metrics and report |
+| `analysis/`    | The processing code called by the tasks: BIDS parsing, mask validation, tool configs, the container launcher (the only module aware of the engine), the checks, the Slurm script writer, metrics and report |
 | `tools/`       | One YAML per skull-stripping tool, and nothing else |
 | `tests/`       | pytest unit tests |
-| `source_data/` | Empty on purpose: inputs are read in place; see [`source_data/CONTENT.md`](source_data/CONTENT.md) |
-| `output_data/` | Default `--output`: plan, masks, logs, metrics, report, Slurm files; see [`output_data/CONTENT.md`](output_data/CONTENT.md) |
+| `Dockerfile`, `container/` | The tool's own container (Python environment, code, Apptainer) and its entry point |
+| `source_data/` | Empty on purpose, since inputs are read in place; see [`source_data/CONTENT.md`](source_data/CONTENT.md) |
+| `output_data/` | The default `--output`; see [`output_data/CONTENT.md`](output_data/CONTENT.md) |
 | `tasks.py`     | The invoke tasks |
-| `invoke.yaml`  | Config: default paths, report range, provenance |
+| `invoke.yaml`  | Configuration: default paths, report range, provenance |
 
----
+## Data
 
-## 🔒 Data
-
-Masks, the report and per-run metrics show or describe participants' brains, so everything under the output folder stays out of git. Only `PROVENANCE.json` and `MANIFEST.json` are tracked, and only in `output_data/`. Keep it that way when running on restricted datasets.
-
----
-
-## Philosophy
-
-Inspired by Uncle Iroh from *Avatar: The Last Airbender*, `airoh` aims to bring simplicity, reusability, and clarity to research infrastructure — one well-structured task at a time.
-
-When working in this project, Claude Code responds as **Uncle Airoh**: patient, warm, and wise.
+The report, the metrics, the logs and the hidden masks show or describe participants' brains, so everything under the output folder stays out of git, except the two provenance records in `output_data/.skullstrip-bench/`. Keep it that way when running on restricted datasets.

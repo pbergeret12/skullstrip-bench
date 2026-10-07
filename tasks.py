@@ -8,7 +8,9 @@ from invoke import task
 # Nothing is ever downloaded or copied in: the dataset, the container images
 # and the tools' requirements are read where they are, given by flags (or by
 # defaults under `inputs:` in invoke.yaml). Everything computed goes to
-# --output (default: output_data/). See CLAUDE.md, "No fetch step".
+# --output (default: output_data/): report/ and logs/ for the user, the rest
+# in the hidden .skullstrip-bench/ (see analysis/layout.py and CLAUDE.md,
+# "No fetch step").
 # --------------------------------------------------------------------------- #
 PATH_HELP = {
     "bids": "BIDS dataset to benchmark (or `inputs: bids:` in invoke.yaml).",
@@ -23,6 +25,12 @@ SELECTION_HELP = {
     "subjects": "Comma-separated subjects, e.g. 10159,sub-10171 (default: all).",
 }
 SCHEDULERS = ("local", "slurm")
+PROJECT_DIR = Path(__file__).resolve().parent   # also inside the tool's container
+
+
+def tools_dir(c):
+    """The tool configs, found next to this file whatever the working directory."""
+    return PROJECT_DIR / c.config.get("tools_dir")
 
 
 def split_list(value):
@@ -37,6 +45,12 @@ def subject_labels(value):
 
 def output_path(c, output=None):
     return Path(output or c.config.get("output_data_dir")).resolve()
+
+
+def state(c, output, *parts):
+    """A path in the output's hidden internal state folder."""
+    from analysis.layout import state_path
+    return state_path(output_path(c, output), *parts)
 
 
 def input_paths(c, bids=None, containers=None, requirements=None, output=None):
@@ -54,7 +68,7 @@ def input_paths(c, bids=None, containers=None, requirements=None, output=None):
         "containers_dir": Path(containers).resolve(),
         "requirements_dir": Path(requirements).resolve() if requirements else None,
         "output_dir": output_path(c, output),
-        "tools_dir": Path(c.config.get("tools_dir")).resolve(),
+        "tools_dir": tools_dir(c),
     }
 
 
@@ -64,7 +78,7 @@ def load_plan(c, output=None):
 
     from invoke.exceptions import Exit
 
-    plan_file = output_path(c, output) / "plan.json"
+    plan_file = state(c, output, "plan.json")
     if not plan_file.is_file():
         raise Exit(f"❌ No plan in {plan_file.parent}: run `invoke run-check` first.")
     plan = json.loads(plan_file.read_text())
@@ -76,7 +90,7 @@ def load_plan(c, output=None):
 def record_inputs(c, plan):
     """
     Record what the inputs resolved to (paths, git commit of a dataset that is
-    a repository) in <output>/MANIFEST.json, through airoh's record_sources.
+    a repository) in the internal MANIFEST.json, through airoh's record_sources.
     """
     from airoh.provenance import record_sources
 
@@ -84,7 +98,7 @@ def record_inputs(c, plan):
                       for name, key in (("bids", "bids_dir"), ("containers", "containers_dir"),
                                         ("requirements", "requirements_dir"))
                       if plan[key]}
-    record_sources(c, output=Path(plan["output_dir"]) / "MANIFEST.json")
+    record_sources(c, output=state(c, plan["output_dir"], "MANIFEST.json"))
 
 
 # --------------------------------------------------------------------------- #
@@ -100,9 +114,9 @@ def run_check(c, bids=None, containers=None, requirements=None, output=None, too
     Check dataset, tools, images, requirements, engine and output — run nothing.
 
     The dataset check is shallow (folder layout only, no image is opened), so
-    it is fast on any dataset size. Prints a ✔/✘ summary, writes
-    <output>/plan.json — the (T1w × tool) runs to execute — and records the
-    inputs in <output>/MANIFEST.json. Always re-runs, never skipped: it is
+    it is fast on any dataset size. Prints a ✔/✘ summary, writes the plan of
+    (T1w × tool) runs to execute and records the inputs, both in the output's
+    hidden .skullstrip-bench/ folder. Always re-runs, never skipped: it is
     cheap, and it must see a newly added tool or image. Exits non-zero when
     nothing can run.
     """
@@ -138,7 +152,7 @@ def prepare_images(c, containers=None, tools=None):
     if not engine_is_ready("apptainer"):
         raise Exit("❌ apptainer not found: on a cluster, `module load apptainer` first.")
     containers_dir = Path(containers or (c.config.get("inputs") or {}).get("containers"))
-    configs, _ = load_tools(c.config.get("tools_dir"))
+    configs, _ = load_tools(tools_dir(c))
     for name, tool in configs.items():
         if tools and name not in split_list(tools):
             continue
@@ -151,16 +165,18 @@ def prepare_images(c, containers=None, tools=None):
             "retry_failed": "Run again the runs whose record says they failed.",
             "smoke": "Run only the first planned run.",
             "threads": "Cores per tool (default: $SLURM_CPUS_PER_TASK, else all cores).",
-            "work_root": "Where tools write their raw outputs (default: <output>/work; "
-                         "on a cluster, the node's local disk)."})
+            "work_root": "Where tools write their raw outputs, deleted after each run "
+                         "(default: inside the output's hidden state; on a cluster, the "
+                         "node's local disk)."})
 def run_skullstrip(c, output=None, subjects=None, tools=None, retry_failed=False, smoke=False,
                    threads=None, work_root=None):
     """
-    Execute <output>/plan.json: one container run per (T1w × tool).
+    Execute the plan: one container run per (T1w × tool).
 
-    Each run writes its mask to <output>/derivatives/<tool>/, its container
-    log to logs/ and its record (status, duration, error) to runs/. The record
-    is the "already done" marker — failed runs included, so a slow run that
+    Each run writes its container output to <output>/logs/<tool>/<stem>.log
+    and its errors to .err; its mask and its record (status, duration,
+    error) go to the hidden internal state, and its raw outputs are deleted.
+    The record is the "already done" marker — failed runs included, so a slow run that
     ran out of memory is not relaunched every time; use --retry-failed.
     Never fetches anything: it reads the plan, written by run-check.
     """
@@ -173,80 +189,88 @@ def run_skullstrip(c, output=None, subjects=None, tools=None, retry_failed=False
              retry_failed=retry_failed, smoke=smoke, threads=threads, work_root=work_root)
 
 
+def planned_subjects(plan, subjects=None):
+    """Subject labels to update: the given ones, else every planned participant."""
+    return subject_labels(subjects) or [label.removeprefix("sub-") for label in plan["subjects"]]
+
+
 @task(help={"output": PATH_HELP["output"], "subjects": SELECTION_HELP["subjects"]})
-def run_figures(c, output=None, subjects=None):
+def run_metrics(c, output=None, subjects=None):
     """
-    Draw the report pictures (thumbnail + full size) of every successful run
-    that has none yet, cached in <output>/figures/<tool>/. A cluster array
-    task draws its own participant's, so the report job only assembles.
+    Update <output>/report/metrics.csv: per run, mask volume (mL), Dice
+    against the consensus of the selected tools that succeeded on the same
+    T1w, duration, status.
+
+    Each participant has its own part (internal state), rewritten here;
+    metrics.csv is then rebuilt from every part. Always re-runs, like
+    run-check: it takes seconds per participant.
     """
-    from analysis.report import draw_figures
+    from analysis.layout import report_path, state_path
+    from analysis.metrics import update_metrics
 
-    output_dir = output_path(c, output)
-    draw_figures(output_dir / "runs", output_dir / "figures", subject_labels(subjects))
+    plan = load_plan(c, output)
+    output_dir = Path(plan["output_dir"])
+    metrics_csv = report_path(output_dir, "metrics.csv")
+    parts = update_metrics(state_path(output_dir, "runs"), state_path(output_dir, "metrics_parts"),
+                           metrics_csv, planned_subjects(plan, subjects),
+                           tools=list(plan["tools"]))
+    print(f"📊 {len(parts)} participants → {metrics_csv}")
 
 
-@task(help={"output": PATH_HELP["output"]})
-def run_metrics(c, output=None):
+@task(help={"output": PATH_HELP["output"], "subjects": SELECTION_HELP["subjects"]})
+def run_report(c, output=None, subjects=None):
     """
-    Write <output>/metrics.csv: per run, mask volume (mL), Dice against the
-    consensus of the tools that succeeded on the same T1w, duration, status.
+    Update <output>/report/report.html: one row per T1w, one column per tool, each
+    cell showing the mask's outline on the T1w, its metrics, and Good / Bad /
+    Uncertain buttons with a comment box (ratings exported as CSV by the page).
 
-    Always re-runs, like run-check: it takes seconds, and the consensus — hence
-    every Dice — changes whenever a run is added, so a cached table would
-    silently go stale.
+    Each participant has its own part (internal state, its pictures
+    embedded), rewritten here after drawing its missing pictures (cached in
+    report/figures/); report.html is then rebuilt from every part. It can be opened
+    at any time: reloading shows the participants finished since.
     """
-    from analysis.metrics import compute_metrics
+    from analysis.report import update_report
 
-    output_dir = output_path(c, output)
-    metrics = compute_metrics(output_dir / "runs")
-    metrics.to_csv(output_dir / "metrics.csv", index=False)
-    print(f"📊 {len(metrics)} runs → {output_dir / 'metrics.csv'}")
+    plan = load_plan(c, output)
+    parts = update_report(plan, planned_subjects(plan, subjects),
+                          c.config.get("report")["plausible_volume_ml"])
+    print(f"📄 {len(parts)} / {len(plan['subjects'])} participants → "
+          f"{Path(plan['output_dir']) / 'report' / 'report.html'}")
 
 
-@task(help={"output": PATH_HELP["output"]})
-def run_report(c, output=None):
+@task(help={"output": PATH_HELP["output"], "subjects": SELECTION_HELP["subjects"]})
+def run_update(c, output=None, subjects=None):
     """
-    Write <output>/report.html: one row per T1w, one column per tool, each
-    cell showing the mask's outline on the T1w, its metrics, and OK / Fail /
-    Doubtful buttons with a comment box (notes exported as CSV by the page).
-
-    Draws any missing picture first (see run-figures); the HTML itself is
-    rebuilt every time, since it reflects metrics.csv, which always changes.
-    Self-contained (images embedded), so the file can be shared alone.
+    Metrics, then report, for some participants (default: all): what a
+    participant's job runs once its runs are done, so the report grows as
+    participants finish.
     """
-    from invoke.exceptions import Exit
+    run_metrics(c, output=output, subjects=subjects)
+    run_report(c, output=output, subjects=subjects)
 
-    from analysis.report import build_report
 
-    output_dir = output_path(c, output)
-    if not (output_dir / "metrics.csv").is_file():
-        raise Exit("❌ No metrics yet: run `invoke run-metrics` first.")
-    build_report(
-        runs_dir=output_dir / "runs",
-        metrics_csv=output_dir / "metrics.csv",
-        figures_dir=output_dir / "figures",
-        output_html=output_dir / "report.html",
-        plausible_volume_ml=c.config.get("report")["plausible_volume_ml"],
-    )
-    print(f"📄 Report: {output_dir / 'report.html'}")
+def record_provenance(c, output=None):
+    """
+    Write the internal PROVENANCE.json (airoh's record_run): checksums of the
+    visible outputs (report/, logs/), the environment, the inputs consumed.
+    """
+    from airoh.provenance import record_run
+
+    c.config.manifest_file = str(state(c, output, "MANIFEST.json"))
+    c.config.output_data_dir = str(output_path(c, output))
+    record_run(c, output=state(c, output, "PROVENANCE.json"),
+               tasks="run-check,run-skullstrip,run-metrics,run-report")
 
 
 @task(help={"output": PATH_HELP["output"]})
 def run_aggregate(c, output=None):
     """
-    Metrics, report, then the provenance record: everything that needs every
-    run to be finished. The last step of `run`, and the cluster report job.
+    Rebuild metrics and report for every participant, then the provenance
+    record. The cluster report job, once the array has ended: it makes the
+    final files complete even if two participants' updates overlapped.
     """
-    from airoh.provenance import record_run
-
-    output_dir = output_path(c, output)
-    run_metrics(c, output=output_dir)
-    run_report(c, output=output_dir)
-    c.config.manifest_file = str(output_dir / "MANIFEST.json")
-    c.config.output_data_dir = str(output_dir)
-    record_run(c, output=output_dir / "PROVENANCE.json",
-               tasks="run-check,run-skullstrip,run-figures,run-metrics,run-report")
+    run_update(c, output=output)
+    record_provenance(c, output=output)
 
 
 # --------------------------------------------------------------------------- #
@@ -256,11 +280,17 @@ def run_aggregate(c, output=None):
             "engine": "Force a container engine: docker or apptainer (default: auto).",
             "scheduler": "local: run everything here (default). slurm: run nothing, "
                          "write job scripts in <output>/slurm/ instead.",
+            "slurm_account": "Slurm allocation written in the job scripts, e.g. def-yourpi "
+                             "(default: def-CHANGEME, to edit).",
+            "slurm_array": "Which lines of jobs.txt (participants) the array runs, e.g. 1-20 "
+                           "for a pilot or 1-500%50 (default: all).",
             "force": "Delete every computed output first, then run from scratch."})
 def run(c, bids=None, containers=None, requirements=None, output=None, tools=None,
-        subjects=None, engine=None, scheduler="local", force=False):
+        subjects=None, engine=None, scheduler="local", slurm_account=None, slurm_array=None,
+        force=False):
     """
-    Full pipeline: check → skullstrip → figures → metrics → report.
+    Full pipeline: check, then participant by participant: skullstrip runs,
+    metrics, report update (the report grows as participants finish).
 
     With --scheduler slurm, only the check runs here; the rest becomes a
     Slurm job array (one task per participant) plus a report job, written to
@@ -269,7 +299,7 @@ def run(c, bids=None, containers=None, requirements=None, output=None, tools=Non
     Steps are called directly rather than through `pre=`, so that flags reach
     them. Every step caches by checking whether its output already exists, so
     a repeated `run` does nothing new; `--force` cleans everything first.
-    run-check and run-metrics always re-run (see their docstrings).
+    run-check, run-metrics and run-report always re-run (see their docstrings).
     """
     if force:
         print("💥 --force: removing every computed output before running")
@@ -278,32 +308,35 @@ def run(c, bids=None, containers=None, requirements=None, output=None, tools=Non
                      output=output, tools=tools, subjects=subjects, engine=engine,
                      scheduler=scheduler)
     if scheduler == "slurm":
-        write_slurm(plan)
+        write_slurm(plan, slurm_account, slurm_array)
         return
-    run_skullstrip(c, output=output)
-    run_figures(c, output=output)
-    run_aggregate(c, output=output)
+    for subject in plan["subjects"]:
+        run_skullstrip(c, output=output, subjects=subject)
+        run_update(c, output=output, subjects=subject)
+    record_provenance(c, output=output)
     print("all analyses completed")
 
 
-def write_slurm(plan):
+def write_slurm(plan, account=None, array=None):
     """Write the Slurm scripts and tell the user what to edit and run."""
     import sys
 
     from analysis.slurm import write_slurm_files
 
     slurm_dir, resources = write_slurm_files(
-        plan, repo_dir=Path(__file__).parent,
-        invoke_bin=Path(sys.executable).parent / "invoke", command_line=" ".join(sys.argv))
+        plan, repo_dir=PROJECT_DIR, invoke_bin=Path(sys.executable).parent / "invoke",
+        command_line=" ".join(sys.argv), account=account, array=array)
     print(f"\n📝 Slurm files written to {slurm_dir}/ (nothing submitted):")
     print(f"   jobs.txt              {len(plan['subjects'])} participants, one per line")
     print(f"   skullstrip_array.sh   one task per participant: {resources['cpus']} CPUs, "
           f"{resources['mem_gb']} GB, {resources['minutes']} min")
-    print("   skullstrip_report.sh  metrics + report once the array has ended")
+    print("   skullstrip_report.sh  final rebuild of metrics + report once the array has ended")
     print("   submit.sh             submits both")
-    print("\nNext: in both .sh files replace def-CHANGEME with your allocation, choose "
-          "--array\n(e.g. 1-20 for a pilot), then run "
-          f"{slurm_dir / 'submit.sh'}")
+    print(f"   job logs: {Path(plan['output_dir']) / 'logs' / 'slurm'}/ (.log and .err)")
+    if not account:
+        print("\nNext: in both .sh files replace def-CHANGEME with your allocation "
+              "(or pass --slurm-account).")
+    print(f"Check --array in skullstrip_array.sh, then run {slurm_dir / 'submit.sh'}")
 
 
 @task(help={**PATH_HELP})
@@ -317,9 +350,30 @@ def run_smoke(c, bids=None, containers=None, requirements=None, output=None):
     run_check(c, bids=bids, containers=containers, requirements=requirements, output=output,
               tools="synthstrip", smoke=True)
     run_skullstrip(c, output=output, smoke=True)
-    run_figures(c, output=output)
     run_aggregate(c, output=output)
     print("✅ Smoke test complete.")
+
+
+@task(help={"output_dir": "Where to write the image archive (default: current folder).",
+            "version": "Image version (default: the git commit, with -dirty if modified)."})
+def build_image(c, output_dir=".", version=None):
+    """
+    Build the tool's own container with Docker and save it as a .tar.
+
+    Run on a machine with internet and Docker (e.g. your laptop). Copy the
+    .tar to the cluster and convert it once:
+    `apptainer build skullstrip-bench.sif docker-archive://skullstrip-bench_<version>.tar`.
+    """
+    if version is None:
+        commit = c.run("git rev-parse --short HEAD", hide=True).stdout.strip()
+        dirty = c.run("git status --porcelain", hide=True).stdout.strip()
+        version = commit + ("-dirty" if dirty else "")
+    archive = Path(output_dir).resolve() / f"skullstrip-bench_{version}.tar"
+    with c.cd(str(PROJECT_DIR)):
+        c.run(f"docker build --platform linux/amd64 --build-arg VERSION={version} "
+              f"-t skullstrip-bench:{version} .")
+    c.run(f"docker save -o {archive} skullstrip-bench:{version}")
+    print(f"📦 {archive}")
 
 
 @task(help={
@@ -357,52 +411,62 @@ def remove(path):
 @task(help={"output": PATH_HELP["output"]})
 def clean_check(c, output=None):
     """
-    Remove <output>/plan.json and the input record MANIFEST.json.
+    Remove the plan and the input record (internal state).
     """
-    remove(output_path(c, output) / "plan.json")
-    remove(output_path(c, output) / "MANIFEST.json")
+    remove(state(c, output, "plan.json"))
+    remove(state(c, output, "MANIFEST.json"))
 
 
 @task(help={"output": PATH_HELP["output"],
             "tools": "Comma-separated tools to clean (default: all)."})
 def clean_skullstrip(c, output=None, tools=None):
     """
-    Remove the outputs of run-skullstrip: derivatives/, runs/, logs/, work/,
-    and the report pictures of those masks in figures/ (a picture is only
-    valid for the mask it was drawn from).
+    Remove the outputs of run-skullstrip: logs, and in the internal state the
+    masks, run records and scratch folders. Also the report pictures of those
+    masks (a picture is only valid for the mask it was drawn from) and the
+    per-participant parts of metrics and report, which summarize these runs.
 
-    With --tools, only those tools' folders go, so their runs (failed ones
+    With --tools, only those tools' files go, so their runs (failed ones
     included) are redone on the next `invoke run`.
     """
+    from analysis.layout import logs_path, report_path
+
     output_dir = output_path(c, output)
-    for folder in ("derivatives", "runs", "logs", "work", "figures"):
-        for tool in split_list(tools) or [""]:
-            remove(output_dir / folder / tool)
+    for tool in split_list(tools) or [""]:
+        for folder in (logs_path(output_dir), report_path(output_dir, "figures"),
+                       state(c, output, "masks"), state(c, output, "runs"),
+                       state(c, output, "work")):
+            remove(folder / tool)
+    remove(state(c, output, "metrics_parts"))
+    remove(state(c, output, "report_parts"))
 
 
 @task(help={"output": PATH_HELP["output"]})
 def clean_metrics(c, output=None):
     """
-    Remove <output>/metrics.csv.
+    Remove report/metrics.csv and its per-participant parts.
     """
-    remove(output_path(c, output) / "metrics.csv")
+    remove(output_path(c, output) / "report" / "metrics.csv")
+    remove(state(c, output, "metrics_parts"))
 
 
 @task(help={"output": PATH_HELP["output"]})
 def clean_report(c, output=None):
     """
-    Remove <output>/report.html and every cached picture (figures/).
+    Remove report/report.html, its pictures and its per-participant parts.
     """
-    remove(output_path(c, output) / "report.html")
-    remove(output_path(c, output) / "figures")
+    remove(output_path(c, output) / "report" / "report.html")
+    remove(output_path(c, output) / "report" / "figures")
+    remove(state(c, output, "report_parts"))
 
 
 @task(help={"output": PATH_HELP["output"]})
 def clean_slurm(c, output=None):
     """
-    Remove the generated Slurm files and job logs (<output>/slurm/).
+    Remove the generated Slurm scripts and the jobs' logs.
     """
-    remove(output_path(c, output) / "slurm")
+    remove(state(c, output, "slurm"))
+    remove(output_path(c, output) / "logs" / "slurm")
 
 
 @task(help={"output": PATH_HELP["output"]})

@@ -85,7 +85,7 @@ def test_resources_take_largest_tool_and_busiest_participant(tmp_path):
 
 def test_measured_apptainer_durations_replace_estimates(tmp_path):
     plan = slurm_plan(tmp_path)
-    record_dir = tmp_path / "out" / "runs" / "slow"
+    record_dir = tmp_path / "out" / ".skullstrip-bench" / "runs" / "slow"
     record_dir.mkdir(parents=True)
     (record_dir / "sub-02.json").write_text(json.dumps(
         {"status": "ok", "engine": "apptainer", "duration_s": 300}))
@@ -104,4 +104,28 @@ def test_slurm_files_one_participant_per_line(tmp_path):
     assert "#SBATCH --time=01:30:00" in array
     assert '--threads "$SLURM_CPUS_PER_TASK" --work-root "$SLURM_TMPDIR/work"' in array
     assert "run-aggregate" in (slurm_dir / "skullstrip_report.sh").read_text()
+    assert f"--error={tmp_path / 'out' / 'logs' / 'slurm'}/array_%A_%a.err" in array
+    assert slurm_dir == tmp_path / "out" / ".skullstrip-bench" / "slurm"
     assert "--dependency=afterany" in (slurm_dir / "submit.sh").read_text()
+
+
+def test_account_and_array_can_be_set_at_generation(tmp_path):
+    slurm_dir, _ = write_slurm_files(slurm_plan(tmp_path), tmp_path, "/env/bin/invoke", "cmd",
+                                     account="def-mypi", array="1-1")
+    array = (slurm_dir / "skullstrip_array.sh").read_text()
+    assert "#SBATCH --account=def-mypi" in array and "#SBATCH --array=1-1\n" in array
+    assert "def-CHANGEME" not in (slurm_dir / "skullstrip_report.sh").read_text()
+
+
+def test_from_the_tool_container_jobs_rerun_the_same_image(tmp_path, monkeypatch):
+    monkeypatch.setenv("SKULLSTRIP_BENCH_IN_CONTAINER", "1")
+    monkeypatch.setenv("APPTAINER_CONTAINER", "/images/skullstrip-bench.sif")
+    plan = {**slurm_plan(tmp_path), "bids_dir": "/data/bids", "containers_dir": "/data/img",
+            "requirements_dir": None}
+    slurm_dir, _ = write_slurm_files(plan, tmp_path, "/env/bin/invoke", "cmd")
+    array = (slurm_dir / "skullstrip_array.sh").read_text()
+    expected = ("apptainer exec --bind /data/bids,/data/img,"
+                f"{tmp_path / 'out'},\"$SLURM_TMPDIR\" /images/skullstrip-bench.sif "
+                "skullstrip-bench run-skullstrip")
+    assert expected in array
+    assert "cd " not in array

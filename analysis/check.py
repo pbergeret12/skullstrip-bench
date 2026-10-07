@@ -1,8 +1,9 @@
 """
 `run-check`: verify everything without launching anything, then write the plan.
 
-The plan (`plan.json`) lists every run to do — one per (T1w × tool) — with all
-of its paths already decided, plus the inputs it came from. `run-skullstrip`
+The plan (`.skullstrip-bench/plan.json`) lists every run to do, one per
+(T1w × tool), with all of its paths already decided (see analysis/layout.py),
+plus the inputs it came from. `run-skullstrip`
 executes it blindly, which is what keeps the processing code simple.
 
 The dataset check is deliberately shallow: it looks at the folder layout only
@@ -12,10 +13,12 @@ T1w simply fails its own run, which is recorded and shown in the report.
 import json
 import os
 import shutil
+import subprocess
 from pathlib import Path
 
 from analysis.bids_inputs import derivative_mask_path, find_t1w, list_subjects
 from analysis.launcher import detect_engine, image_status, list_image_files
+from analysis.layout import logs_path, state_path
 from analysis.tool_configs import load_tools, missing_requirements
 
 MAX_NAMES_SHOWN = 10
@@ -45,6 +48,7 @@ def run_check(paths, engine=None, scheduler="local", subjects=None, tools=None, 
             for t1w in t1w_images for tool_name in usable_tools]
     plan = {
         "ready": bool(runs) and engine is not None and writable,
+        "skullstrip_bench_version": tool_version(),
         "engine": engine,
         "scheduler": scheduler,
         **{key: str(value) if value else None for key, value in paths.items()},
@@ -54,6 +58,16 @@ def run_check(paths, engine=None, scheduler="local", subjects=None, tools=None, 
     }
     report_plan(plan)
     return plan
+
+
+def tool_version():
+    """This tool's version: VERSION in its container, else the checkout's git commit."""
+    project_dir = Path(__file__).resolve().parents[1]
+    if (project_dir / "VERSION").is_file():
+        return (project_dir / "VERSION").read_text().strip()
+    result = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=project_dir,
+                            capture_output=True, text=True)
+    return result.stdout.strip() or "unknown"
 
 
 def check_dataset(bids_dir, subjects=None, smoke=False):
@@ -165,7 +179,7 @@ def usable_tool(tool, engine, paths, require_sif):
 def check_output(output_dir):
     """Print whether the output folder is writable, return it."""
     print(f"\nOutput  {output_dir}")
-    Path(output_dir).mkdir(parents=True, exist_ok=True)
+    state_path(output_dir).mkdir(parents=True, exist_ok=True)
     if os.access(output_dir, os.W_OK):
         ok("writable")
         return True
@@ -174,24 +188,27 @@ def check_output(output_dir):
 
 
 def make_run(tool_name, t1w, output_dir):
-    """One (T1w × tool) run, with every path it reads or writes."""
-    output_dir = Path(output_dir)
+    """
+    One (T1w × tool) run, with every path it reads or writes: its logs are
+    visible, its mask, record and scratch folder are internal state.
+    """
+    stem = t1w["stem"]
     return {
         "tool": tool_name,
         "subject": t1w["entities"]["sub"],
-        "stem": t1w["stem"],
+        "stem": stem,
         "t1w": t1w["path"],
-        "derivative_dir": str(output_dir / "derivatives" / tool_name),
-        "mask": str(derivative_mask_path(output_dir / "derivatives", tool_name, t1w)),
-        "record": str(output_dir / "runs" / tool_name / f"{t1w['stem']}.json"),
-        "log": str(output_dir / "logs" / tool_name / f"{t1w['stem']}.log"),
-        "work_dir": str(output_dir / "work" / tool_name / t1w["stem"]),
+        "mask": str(derivative_mask_path(state_path(output_dir, "masks"), tool_name, t1w)),
+        "record": str(state_path(output_dir, "runs", tool_name, f"{stem}.json")),
+        "log": str(logs_path(output_dir, tool_name, f"{stem}.log")),
+        "err": str(logs_path(output_dir, tool_name, f"{stem}.err")),
+        "work_dir": str(state_path(output_dir, "work", tool_name, stem)),
     }
 
 
 def report_plan(plan):
-    """Print the plan summary and write it to `<output>/plan.json`."""
-    plan_file = Path(plan["output_dir"]) / "plan.json"
+    """Print the plan summary and write it to `.skullstrip-bench/plan.json`."""
+    plan_file = state_path(plan["output_dir"], "plan.json")
     plan_file.write_text(json.dumps(plan, indent=2) + "\n")
     done = sum(Path(run["record"]).is_file() for run in plan["runs"])
     print(f"\nPlan  {plan_file}")

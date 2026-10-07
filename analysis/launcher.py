@@ -126,18 +126,22 @@ def container_command(engine, image, mounts, command, name="skullstrip-bench", t
     return options + [image] + command
 
 
-def run_container(engine, image, mounts, command, log_file, timeout_min=None, threads=1):
+def run_container(engine, image, mounts, command, log_file, err_file, timeout_min=None,
+                  threads=1):
     """
-    Run `command` in the container, write its output to `log_file`, return the
-    exit code. Past `timeout_min` minutes (if set), stop it and raise RunTimeout.
+    Run `command` in the container and return its exit code. Its standard
+    output goes to `log_file` (after a first line with the full command), its
+    errors to `err_file`. Past `timeout_min` minutes (if set), stop it and
+    raise RunTimeout.
     """
     name = f"skullstrip-bench-{os.getpid()}-{Path(log_file).stem}"
     full_command = container_command(engine, image, mounts, command, name, threads)
-    with open(log_file, "w") as log:
-        log.write(shlex.join(full_command) + "\n\n")
+    Path(log_file).parent.mkdir(parents=True, exist_ok=True)
+    with open(log_file, "w") as log, open(err_file, "w") as err:
+        log.write(f"# {shlex.join(full_command)}\n")
         log.flush()
         try:
-            return subprocess.run(full_command, stdout=log, stderr=subprocess.STDOUT,
+            return subprocess.run(full_command, stdout=log, stderr=err,
                                   timeout=timeout_min * 60 if timeout_min else None).returncode
         except subprocess.TimeoutExpired:
             # Killing `docker run` leaves the container running in the VM: stop

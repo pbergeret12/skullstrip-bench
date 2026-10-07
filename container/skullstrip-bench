@@ -1,0 +1,6 @@
+#!/bin/sh
+# Entry point of the Skullstrip Bench container: the project's invoke tasks,
+# run from the caller's working directory (so relative paths keep working).
+#   apptainer run skullstrip-bench.sif run --bids … --containers … --output …
+#   apptainer exec skullstrip-bench.sif skullstrip-bench --list
+exec invoke --search-root /opt/skullstrip-bench "$@"
