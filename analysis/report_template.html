@@ -11,8 +11,8 @@
 <style>
   :root {
     --ground: #f6f5f2; --panel: #ffffff; --ink: #1d1d1f; --muted: #6b6b70;
-    --line: #e2e0da; --accent: #2457c5; --ok: #1f8a4c; --fail: #c62f2f;
-    --doubt: #b7791f; --warn-bg: #fde8c8;
+    --line: #e2e0da; --accent: #2457c5; --good: #1f8a4c; --bad: #c62f2f;
+    --uncertain: #b7791f; --warn-bg: #fde8c8;
   }
   * { box-sizing: border-box; }
   body { margin: 0; padding: 24px 16px 48px; background: var(--ground); color: var(--ink);
@@ -38,21 +38,23 @@
           padding: 8px; vertical-align: top; width: 560px; min-width: 320px; }
   .cell.missing { color: var(--muted); text-align: center; vertical-align: middle; }
   .cell img { display: block; width: 100%; border-radius: 4px; cursor: zoom-in; background: #000; }
-  .cell[data-rating="ok"] { border-color: var(--ok); }
-  .cell[data-rating="fail"] { border-color: var(--fail); }
-  .cell[data-rating="doubtful"] { border-color: var(--doubt); }
+  .cell[data-rating="good"] { border-color: var(--good); }
+  .cell[data-rating="bad"] { border-color: var(--bad); }
+  .cell[data-rating="uncertain"] { border-color: var(--uncertain); }
   .metrics { display: flex; gap: 14px; margin: 6px 2px; font-variant-numeric: tabular-nums; }
   .metrics .implausible { background: var(--warn-bg); color: #8a4b00; font-weight: 600;
                           padding: 0 6px; border-radius: 4px; }
-  .failed { color: var(--fail); font-weight: 600; font-size: 16px; margin: 4px 2px; }
+  .failed { color: var(--bad); font-weight: 600; font-size: 16px; margin: 4px 2px; }
   .error { white-space: pre-wrap; word-break: break-word; font-size: 12px; max-height: 220px;
            overflow: auto; background: #faf2f2; padding: 8px; border-radius: 4px; margin: 0; }
   .rating { display: flex; gap: 6px; margin: 6px 0; }
   .rating button { flex: 1; font: inherit; padding: 4px 0; border-radius: 6px; cursor: pointer;
                    border: 1px solid var(--line); background: #fff; color: var(--ink); }
-  .rating button[data-rating="ok"].active { background: var(--ok); border-color: var(--ok); color: #fff; }
-  .rating button[data-rating="fail"].active { background: var(--fail); border-color: var(--fail); color: #fff; }
-  .rating button[data-rating="doubtful"].active { background: var(--doubt); border-color: var(--doubt); color: #fff; }
+  .rating button[data-rating="good"].active { background: var(--good); border-color: var(--good); color: #fff; }
+  .rating button[data-rating="bad"].active { background: var(--bad); border-color: var(--bad); color: #fff; }
+  .rating button[data-rating="uncertain"].active { background: var(--uncertain); border-color: var(--uncertain); color: #fff; }
+  .status { display: inline-block; background: var(--panel); border: 1px solid var(--line);
+            border-radius: 6px; padding: 6px 10px; margin: 0 0 12px; }
   textarea { width: 100%; font: inherit; padding: 6px; border: 1px solid var(--line);
              border-radius: 6px; resize: vertical; }
   body.hide-rated tbody tr:not(:has(.cell:not([data-rating]):not(.missing))) { display: none; }
@@ -74,10 +76,14 @@
 <body>
 <header>
   <h1>Skullstrip Bench</h1>
+  <p class="status">
+    <strong>$n_done / $n_planned participants processed</strong> × <strong>$tools</strong>
+    — updated $updated. Reload the page to see participants finished since.
+  </p>
   <p class="lede">
-    <strong>$n_t1w T1w</strong> × <strong>$tools</strong>, generated $date.
     Each picture shows the T1w with the mask's outline in red (axial, coronal, sagittal; same
-    slices for every tool). There is no ground truth: rate each mask by eye.
+    slices for every tool). There is no ground truth: rate each mask by eye, Good / Bad /
+    Uncertain. Your ratings stay in this browser across reloads; export them as CSV.
   </p>
   <p class="lede">
     Metrics only guide the eye. <strong>Volume</strong> is highlighted outside $volume_min–$volume_max mL.
@@ -87,7 +93,7 @@
 </header>
 
 <div class="toolbar">
-  <button type="button" id="export">Export notes (CSV)</button>
+  <button type="button" id="export">Export ratings (CSV)</button>
   <label><input type="checkbox" id="hide-rated"> Hide fully rated rows</label>
   <span id="progress"></span>
 </div>
@@ -116,7 +122,7 @@ $rows
 <script>
   // Notes are kept in this browser (localStorage) so they survive a reload,
   // and exported as CSV. A report regenerated at the same path keeps its notes.
-  var STORAGE_KEY = "skullstrip-bench-notes";
+  var STORAGE_KEY = "skullstrip-bench-ratings";
   var cells = Array.prototype.slice.call(document.querySelectorAll(".cell[data-tool]"));
 
   function loadNotes() {

@@ -1,15 +1,24 @@
-# ANTs antsBrainExtraction.sh with the OASIS template (fetched by
-# `invoke fetch-ants-template` into tools/ants/template/, mounted as {tool_dir}).
-# Slow: registration-based, several minutes per T1w even natively.
+# ANTs antsBrainExtraction.sh with the OASIS template. The template is not in
+# the image: put the three files below in <requirements>/ants/ (see README,
+# "Compatible containers"). Thread count comes from
+# ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS, which the launcher sets.
 name: ants
 image: antsx/ants:latest
 container: ants_latest
 command: >-
   antsBrainExtraction.sh -d 3 -a {input}
-  -e {tool_dir}/template/T_template0.nii.gz
-  -m {tool_dir}/template/T_template0_BrainCerebellumProbabilityMask.nii.gz
-  -f {tool_dir}/template/T_template0_BrainCerebellumRegistrationMask.nii.gz
+  -e {requirements}/T_template0.nii.gz
+  -m {requirements}/T_template0_BrainCerebellumProbabilityMask.nii.gz
+  -f {requirements}/T_template0_BrainCerebellumRegistrationMask.nii.gz
   -o {output_prefix}_
 mask_output: "{output_prefix}_BrainExtractionMask.nii.gz"
-# Under amd64 emulation on a Mac; a stuck run is stopped and recorded as `timeout`.
+requires:
+  - T_template0.nii.gz
+  - T_template0_BrainCerebellumProbabilityMask.nii.gz
+  - T_template0_BrainCerebellumRegistrationMask.nii.gz
+# A stuck run is stopped and recorded as `timeout`.
 timeout_min: 240
+# Cluster resources for one run: registration-based, the slowest tool.
+cpus: 8
+mem_gb: 8
+minutes: 20

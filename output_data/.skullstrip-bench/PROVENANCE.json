@@ -1,0 +1,78 @@
+{
+  "command": "/Users/pierrebergeret/Documents/REPOS_GITHUB/skullstrip-bench/.venv/bin/invoke run-smoke --bids /Users/pierrebergeret/Documents/TRAVAIL_DOCTORAT/sample_ds30 --containers /Users/pierrebergeret/Documents/TRAVAIL_DOCTORAT/containers/skullstrip",
+  "environment": {
+    "lockfiles": {
+      "uv.lock": "70b5b9439224598f6e948a2da241e16380ed7ae764d4eb52bb739b696322b35b"
+    },
+    "packages": {
+      "airoh": "0.5.0",
+      "invoke": "3.0.3",
+      "matplotlib": "3.10.9",
+      "nibabel": "5.4.2",
+      "nilearn": "0.14.1",
+      "numpy": "2.4.4",
+      "pandas": "3.0.2",
+      "pyyaml": "6.0.3",
+      "requests": "2.33.1"
+    },
+    "platform": "macOS-26.5.2-arm64-arm-64bit-Mach-O",
+    "python": "3.13.13"
+  },
+  "inputs": {
+    "assets": {
+      "bids": {
+        "commit": null,
+        "resolved_path": "/Users/pierrebergeret/Documents/TRAVAIL_DOCTORAT/sample_ds30",
+        "sha256": null
+      },
+      "containers": {
+        "commit": null,
+        "resolved_path": "/Users/pierrebergeret/Documents/TRAVAIL_DOCTORAT/containers/skullstrip",
+        "sha256": null
+      }
+    },
+    "manifest_file": "/Users/pierrebergeret/Documents/REPOS_GITHUB/skullstrip-bench/output_data/.skullstrip-bench/MANIFEST.json",
+    "manifest_sha256": "d158289868b424da8affa4fa4943dd919538beb709a3409e83732fce72dc288e"
+  },
+  "outputs": {
+    "logs/synthstrip/sub-10159.err": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "size_bytes": 0
+    },
+    "logs/synthstrip/sub-10159.log": {
+      "sha256": "f4bdc92134a4e8cd68d47caa30478e886050ad88c326f6e9554f7539ca0bed8e",
+      "size_bytes": 1024
+    },
+    "report/figures/synthstrip/sub-10159.jpg": {
+      "sha256": "cacc1f1743094984b98af3f38362256ec93a1510f00c84dcbbc8a724095a1458",
+      "size_bytes": 111197
+    },
+    "report/figures/synthstrip/sub-10159_full.jpg": {
+      "sha256": "e9f84f4aae164f3666f7addaa740dbba7166aea3bb66bf8210e588777746a87e",
+      "size_bytes": 886447
+    },
+    "report/metrics.csv": {
+      "sha256": "48d7e6031c3deeac7a702006cf60b232c62b93d8e07a97422f2498f12e9452f4",
+      "size_bytes": 131
+    },
+    "report/report.html": {
+      "sha256": "adba0407917be595e1dae51b15f53dd43885ebe0154a3c80ff0de84bb36bec1c",
+      "size_bytes": 1344999
+    }
+  },
+  "recorded_at": "2026-10-07T19:39:59+00:00",
+  "repository": {
+    "branch": "skullstrip-pipeline",
+    "commit": "083bcb681804122f037c61d21fecc4bfb7e67582",
+    "dirty": true,
+    "remote": "git@github.com:pbergeret12/skullstrip-bench.git",
+    "toplevel": "/Users/pierrebergeret/Documents/REPOS_GITHUB/skullstrip-bench"
+  },
+  "schema": "airoh/provenance/1",
+  "tasks": [
+    "run-check",
+    "run-skullstrip",
+    "run-metrics",
+    "run-report"
+  ]
+}

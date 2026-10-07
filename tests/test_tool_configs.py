@@ -48,3 +48,25 @@ def test_timeout_must_be_a_positive_number(tmp_path):
     tools, problems = load_tools(tmp_path)
     assert tools["slow"]["timeout_min"] == 90
     assert "timeout_min" in problems["zero"] and "timeout_min" in problems["word"]
+
+
+def test_requires_and_resources(tmp_path):
+    from analysis.tool_configs import missing_requirements
+
+    atlas_command = "{output_prefix} -a {requirements}/a.nii.gz\n"
+    write_configs(tmp_path,
+                  atlas=VALID.replace("good", "atlas").replace("{output_prefix}\n", atlas_command)
+                  + "requires: [a.nii.gz]\ncpus: 8\nmem_gb: 16\n",
+                  listless=VALID.replace("good", "listless") + "requires: a.nii.gz\n",
+                  oldstyle=VALID.replace("good", "oldstyle").replace("{input}", "{tool_dir}"))
+    tools, problems = load_tools(tmp_path)
+    atlas = tools["atlas"]
+    assert (atlas["cpus"], atlas["mem_gb"], atlas["minutes"]) == (8, 16, 10)
+    assert "requires" in problems["listless"]
+    assert "tool_dir" in problems["oldstyle"]
+
+    assert missing_requirements(atlas, None) == ["a.nii.gz"]
+    (tmp_path / "req" / "atlas").mkdir(parents=True)
+    assert missing_requirements(atlas, tmp_path / "req") == ["a.nii.gz"]
+    (tmp_path / "req" / "atlas" / "a.nii.gz").write_text("")
+    assert missing_requirements(atlas, tmp_path / "req") == []

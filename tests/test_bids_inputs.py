@@ -4,7 +4,6 @@ import pytest
 
 from analysis.bids_inputs import (derivative_mask_path, find_t1w, list_subjects, parse,
                                   split_ext)
-from analysis.image_checks import check_t1w
 
 
 def write_image(path, shape=(64, 64, 64)):
@@ -51,14 +50,17 @@ def test_derivative_path_keeps_session_and_entities(bids_dir):
                          "sub-02_ses-pre_acq-mprage_run-1_desc-brain_mask.nii.gz")
 
 
-def test_check_t1w_accepts_3d_and_rejects_4d(tmp_path):
-    write_image(tmp_path / "ok.nii.gz")
-    write_image(tmp_path / "bold.nii.gz", shape=(64, 64, 64, 10))
-    assert check_t1w(tmp_path / "ok.nii.gz")[0] is None
-    assert "4D" in check_t1w(tmp_path / "bold.nii.gz")[0]
+def test_check_mask_rejects_missing_non_binary_and_off_grid(tmp_path):
+    from analysis.image_checks import check_mask
 
-
-def test_check_t1w_reports_unreadable_file(tmp_path):
-    broken = tmp_path / "broken.nii.gz"
-    broken.write_text("not an image")
-    assert "cannot be read" in check_t1w(broken)[0]
+    write_image(tmp_path / "t1w.nii.gz")
+    mask = np.zeros((64, 64, 64), dtype=np.uint8)
+    mask[20:40, 20:40, 20:40] = 1
+    nib.save(nib.Nifti1Image(mask, np.eye(4)), tmp_path / "good.nii.gz")
+    nib.save(nib.Nifti1Image(mask * 2, np.eye(4)), tmp_path / "labels.nii.gz")
+    nib.save(nib.Nifti1Image(mask[:32], np.eye(4)), tmp_path / "small.nii.gz")
+    t1w = tmp_path / "t1w.nii.gz"
+    assert check_mask(tmp_path / "good.nii.gz", t1w) is None
+    assert "no mask" in check_mask(tmp_path / "absent.nii.gz", t1w)
+    assert "not binary" in check_mask(tmp_path / "labels.nii.gz", t1w)
+    assert "grid" in check_mask(tmp_path / "small.nii.gz", t1w)

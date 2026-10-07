@@ -1,20 +1,17 @@
-# Everything the pipeline computes stays out of git: masks and the report show
-# participants' brains, and per-run metrics are per-participant data.
-plan.json
-derivatives/
-runs/
+# Everything the pipeline computes stays out of git: the report shows
+# participants' brains, and the metrics and logs are per-participant data.
+report/
 logs/
-work/
-figures/
-*.png
-*.jpg
-*.csv
-*.html
 
-# Guard: no step writes NIfTI at this level, but keep this so a stray volume
-# can never be committed by accident.
+# Internal state: ignored, except the two small provenance records, which say
+# what produced the outputs and from which inputs.
+.skullstrip-bench/*
+!.skullstrip-bench/PROVENANCE.json
+!.skullstrip-bench/MANIFEST.json
+
+# Guard: nothing should write NIfTI or pictures at this level, but keep this
+# so a stray volume can never be committed by accident.
 *.nii
 *.nii.gz
-
-# Provenance is a tracked output: it records what produced everything else.
-!PROVENANCE.json
+*.png
+*.jpg

@@ -2,6 +2,11 @@
 name: synthstrip
 image: freesurfer/synthstrip:1.8
 container: synthstrip_1.8
-command: mri_synthstrip -i {input} -m {mask}
-# Under amd64 emulation on a Mac; a stuck run is stopped and recorded as `timeout`.
+command: mri_synthstrip -i {input} -m {mask} -t {threads}
+# A stuck run is stopped and recorded as `timeout`.
 timeout_min: 20
+# Cluster resources for one run (minutes: expected duration on a cluster node;
+# replaced by measured durations once Apptainer runs exist in the output).
+cpus: 4
+mem_gb: 8
+minutes: 3

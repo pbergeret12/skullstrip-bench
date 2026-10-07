@@ -2,8 +2,12 @@
 `run-metrics`: one row per run, with numbers that guide the eye — not a verdict.
 
 There is no ground truth, so each mask is compared with the consensus of all
-tools that succeeded on the same T1w (majority vote, voxel by voxel).
+tools that succeeded on the same T1w (majority vote, voxel by voxel). Since
+the consensus only involves one T1w, a participant's metrics can be computed
+as soon as that participant is done: each one gets its own part (internal
+state), and `report/metrics.csv` is rebuilt from the parts.
 """
+import io
 import json
 from pathlib import Path
 
@@ -11,22 +15,51 @@ import nibabel as nib
 import numpy as np
 import pandas as pd
 
+from analysis.assemble import rebuild_from_parts, write_atomically
+
 COLUMNS = ["subject", "stem", "tool", "status", "volume_ml", "dice_consensus",
            "n_tools_consensus", "duration_s", "error"]
 
 
-def load_records(runs_dir):
-    """Every run record written by `run-skullstrip` (`runs/<tool>/<stem>.json`)."""
-    return [json.loads(path.read_text()) for path in sorted(Path(runs_dir).glob("*/*.json"))]
+def load_records(runs_dir, subject=None, tools=None):
+    """
+    The run records written by `run-skullstrip` (`runs/<tool>/<stem>.json`),
+    optionally for one subject and some tools only.
+    """
+    patterns = [f"sub-{subject}.json", f"sub-{subject}_*.json"] if subject else ["*.json"]
+    paths = sorted({path for pattern in patterns for path in Path(runs_dir).glob(f"*/{pattern}")})
+    records = [json.loads(path.read_text()) for path in paths]
+    return [record for record in records if not tools or record["tool"] in tools]
 
 
-def compute_metrics(runs_dir):
-    """Read every run record under `runs_dir`, return the metrics table."""
-    records = load_records(runs_dir)
+def update_metrics(runs_dir, parts_dir, metrics_csv, subjects, tools=None):
+    """Rewrite the metrics part of each subject, then rebuild `metrics.csv`."""
+    for subject in subjects:
+        table = metrics_table(load_records(runs_dir, subject, tools))
+        write_atomically(Path(parts_dir) / f"sub-{subject}.csv", table.to_csv(index=False))
+    return rebuild_from_parts(parts_dir, ".csv", metrics_csv, concatenate_csv)
+
+
+def concatenate_csv(parts):
+    """One CSV text holding the rows of every part."""
+    tables = [pd.read_csv(part) for part in parts]
+    table = pd.concat(tables) if tables else pd.DataFrame(columns=COLUMNS)
+    buffer = io.StringIO()
+    table.to_csv(buffer, index=False)
+    return buffer.getvalue()
+
+
+def metrics_table(records):
+    """The metrics of these records, one row per run, grouped by T1w."""
     rows = []
     for stem in sorted({record["stem"] for record in records}):
         rows += metrics_for_one_t1w([record for record in records if record["stem"] == stem])
     return pd.DataFrame(rows, columns=COLUMNS)
+
+
+def compute_metrics(runs_dir, tools=None):
+    """The metrics table of every run under `runs_dir`."""
+    return metrics_table(load_records(runs_dir, tools=tools))
 
 
 def metrics_for_one_t1w(records):

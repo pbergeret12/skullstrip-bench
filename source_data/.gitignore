@@ -1,13 +1,7 @@
-# Links to the BIDS dataset and the container images (see CONTENT.md).
-bids
-containers
-
-# Guard: nothing should ever store images here, but neuroimaging data may be
-# identifiable and container archives are huge — never commit either.
+# This project reads its inputs in place (--bids, --containers,
+# --requirements): nothing should ever be stored here.
+# Guard: neuroimaging data may be identifiable and container archives are huge.
 *.nii
 *.nii.gz
 *.tar
 *.sif
-
-# Provenance is tracked: it records what the inputs actually were.
-!MANIFEST.json
