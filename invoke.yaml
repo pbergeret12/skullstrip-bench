@@ -1,9 +1,19 @@
 # invoke.yaml
 
-# source data folders
+# Defaults for the path flags of `run`, `run-check` and `run-smoke`. Left
+# null, --bids and --containers must be given on the command line. Set them to
+# avoid retyping paths on one machine (keep such edits out of commits).
+# Nothing is ever downloaded: these folders are read where they are.
+inputs:
+  bids: null          # the BIDS dataset
+  containers: null    # container images only: <name>.tar and/or <name>.sif
+  requirements: null  # one subfolder per tool: atlases, templates, configs
+
+# source data folder: unused by this project (inputs are read in place, see
+# `inputs:`), kept because airoh's `verify` checks it against its CONTENT.md
 source_data_dir: source_data
 
-# output data folders
+# default output folder (--output)
 output_data_dir: output_data
 
 # tool configurations: one YAML per tool (see analysis/tool_configs.py)
@@ -16,14 +26,13 @@ report:
 
 # provenance records
 #
-# Written by `fetch` and `run` (see airoh.provenance). Both are git-tracked:
-# they are small, and they are the only record of what produced a result when
-# datalad is not in play. PROVENANCE.json is *expected* to change on every run
-# — that churn is the record doing its job, not a bug to fix.
-manifest_file: source_data/MANIFEST.json
+# Written into the output folder: MANIFEST.json by `run-check` (what each
+# input path resolved to, with its git commit when it is a repository) and
+# PROVENANCE.json by `run` (what produced the outputs). These are the
+# defaults for --output output_data; both are git-tracked there.
+manifest_file: output_data/MANIFEST.json
 provenance_file: output_data/PROVENANCE.json
-# Files above this size record their metadata but no checksum, so one large
-# asset cannot make every fetch crawl.
+# Files above this size record their metadata but no checksum.
 provenance_hash_max_bytes: 104857600
 
 # `invoke verify` settings — all optional; delete this block to accept the
@@ -31,47 +40,16 @@ provenance_hash_max_bytes: 104857600
 verify:
   # Check names to skip entirely, e.g. [lint, tracked_size].
   skip_checks: []
-  # Glob patterns exempt from the path and tracked-file checks.
-  ignore_paths: []
+  # Glob patterns exempt from the path and tracked-file checks. The docs name
+  # things that look like paths but are not in this repository:
+  ignore_paths:
+    - "<output>/*"          # placeholders for the user's --output folder
+    - "<requirements>/*"    # ... and --requirements folder
+    - "*:*"                 # Docker image references (name:tag)
+    - "ants/*"              # files inside the user's requirements folder
+    - "container_requirements/*"
+    - "MICCAI2012-Multi-Atlas-Challenge-Data"   # folder inside ANTs' Oasis.zip
+    - "jobs.txt"            # written only by --scheduler slurm, under <output>/slurm/
+    - "slurm"
   # Largest file git may track before the check fails (default 10 MB).
   max_tracked_bytes: 10485760
-
-# file sources
-#
-# Each asset defines `output_file` plus `url` and/or `source`:
-#   - `url`    : download the file over HTTP into `output_file`
-#   - `source` : path to already-present data to symlink into `output_file`
-#                instead of downloading (a per-asset alternative to the
-#                `invoke fetch-{name} --source ...` flag)
-files:
-  # The BIDS dataset to benchmark. Never downloaded: link an existing one with
-  # `invoke fetch --bids-source /path/to/bids` (or set `source:` here).
-  bids:
-    output_file: source_data/bids
-  # The container images (Docker `.tar` archives and/or `.sif` files, nothing
-  # else). Never downloaded either: `invoke fetch --containers-source /path`.
-  containers:
-    output_file: source_data/containers
-  # The OASIS brain template used by antsBrainExtraction.sh, from the ANTs
-  # templates on figshare (doi:10.6084/m9.figshare.915436). The one download
-  # in this project: it is tool configuration, not data, and lives next to
-  # tools/ants.yaml. `invoke fetch-ants-template` unzips what ANTs needs into
-  # tools/ants/template/.
-  ants_template:
-    url: https://ndownloader.figshare.com/files/3133832
-    output_file: tools/ants/Oasis.zip
-
-# datalad datasets (optional)
-#
-# For a real datalad dataset (as opposed to a plain file/folder under
-# `files:`), use `airoh.datalad` instead of `airoh.acquisition.fetch_data` —
-# see CLAUDE.md, "Datalad datasets, and plain assets". Each entry supports
-# `output_dir` (where the dataset checkout lives), `url` (to `datalad clone`),
-# and `source` (an existing checkout to symlink instead). A plain
-# `{name: output_dir}` string is also accepted.
-#
-# datasets:
-#   cneuromod:
-#     output_dir: source_data/cneuromod.all
-#     url: https://github.com/courtois-neuromod/cneuromod.all.git
-#     # source: /data/cneuromod.all   # symlink an existing checkout instead

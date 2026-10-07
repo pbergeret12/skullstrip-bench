@@ -13,6 +13,10 @@ from pathlib import Path
 
 ENGINES = ("apptainer", "docker")  # auto-detection order
 DOCKER_KILL_TIMEOUT_S = 60
+# Environment variables that cap a tool's threads, whatever library it uses
+# (ITK for ANTs, OpenMP for most others). Without them a tool may grab every
+# core of a shared cluster node.
+THREAD_VARIABLES = ("ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS", "OMP_NUM_THREADS")
 
 
 class RunTimeout(Exception):
@@ -49,13 +53,14 @@ def list_image_files(containers_dir):
                   | {path.stem for path in Path(containers_dir).glob("*.sif")})
 
 
-def image_status(engine, tool, containers_dir):
+def image_status(engine, tool, containers_dir, require_sif=False):
     """
     Whether the tool's image can be used, without changing anything.
 
     Returns `(ready, message)`. An image that still has to be loaded (Docker)
     or built (Apptainer) from its `.tar` counts as ready: that happens on the
-    first run.
+    first run — unless `require_sif`, for cluster jobs, where every array task
+    would otherwise try to build the same `.sif` at once.
     """
     tar_file = Path(containers_dir) / f"{tool['container']}.tar"
     sif_file = Path(containers_dir) / f"{tool['container']}.sif"
@@ -67,9 +72,12 @@ def image_status(engine, tool, containers_dir):
     if engine == "apptainer":
         if sif_file.is_file():
             return True, f"{sif_file.name} found"
+        if tar_file.is_file() and require_sif:
+            return False, (f"{sif_file.name} not built yet: run `invoke prepare-images` "
+                           "on a login node first")
         if tar_file.is_file():
             return True, f"{sif_file.name} will be built from {tar_file.name}"
-    return False, f"no {tar_file.name} in {containers_dir}"
+    return False, f"no {tar_file.name} or {sif_file.name} in {containers_dir}"
 
 
 def prepare_image(engine, tool, containers_dir):
@@ -95,33 +103,36 @@ def prepare_image(engine, tool, containers_dir):
     return str(sif_file)
 
 
-def container_command(engine, image, mounts, command, name="skullstrip-bench"):
+def container_command(engine, image, mounts, command, name="skullstrip-bench", threads=1):
     """
     The full engine command line that runs `command` inside `image`.
 
     `mounts` is a list of `(host_path, container_path, read_only)`. `name`
-    labels the Docker container, so it can be stopped on timeout.
+    labels the Docker container, so it can be stopped on timeout. `threads`
+    caps the tool's threads through THREAD_VARIABLES.
     """
     if engine == "docker":
         options = ["docker", "run", "--rm", "--name", name, "--platform", "linux/amd64",
                    "--entrypoint", ""]
-        mount_flag = "-v"
+        mount_flag, env_flag = "-v", "-e"
     else:
         options = ["apptainer", "exec", "--compat"]
-        mount_flag = "--bind"
+        mount_flag, env_flag = "--bind", "--env"
     for host_path, container_path, read_only in mounts:
         suffix = ":ro" if read_only else ""
         options += [mount_flag, f"{Path(host_path).resolve()}:{container_path}{suffix}"]
+    for variable in THREAD_VARIABLES:
+        options += [env_flag, f"{variable}={threads}"]
     return options + [image] + command
 
 
-def run_container(engine, image, mounts, command, log_file, timeout_min=None):
+def run_container(engine, image, mounts, command, log_file, timeout_min=None, threads=1):
     """
     Run `command` in the container, write its output to `log_file`, return the
     exit code. Past `timeout_min` minutes (if set), stop it and raise RunTimeout.
     """
     name = f"skullstrip-bench-{os.getpid()}-{Path(log_file).stem}"
-    full_command = container_command(engine, image, mounts, command, name)
+    full_command = container_command(engine, image, mounts, command, name, threads)
     with open(log_file, "w") as log:
         log.write(shlex.join(full_command) + "\n\n")
         log.flush()

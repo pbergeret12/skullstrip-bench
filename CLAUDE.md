@@ -23,15 +23,18 @@ External requirements: Docker (with its daemon running) **or** Apptainer. Contai
 ## Common Commands
 
 ```bash
-uv run invoke fetch --bids-source /path/to/bids --containers-source /path/to/images
-                              # Symlink the dataset and image folder, record the manifest
-uv run invoke run-check       # Check everything, write output_data/plan.json (runs nothing)
-uv run invoke run-skullstrip  # Execute the plan: one container run per (T1w × tool)
-uv run invoke run             # Full pipeline (cached: skips steps whose output exists)
-uv run invoke run --force     # Clean everything first, then run from scratch
-uv run invoke run-smoke       # 1 T1w × SynthStrip, end to end
+# Every task that reads or writes results takes --output (default: output_data/).
+uv run invoke run-check --bids PATH --containers PATH [--requirements PATH] [--output PATH]
+                              # Check everything (shallow), write <output>/plan.json; runs nothing
+uv run invoke run --bids PATH --containers PATH [--requirements PATH] [--output PATH] \
+                  [--tools a,b] [--subjects 01,02] [--engine docker|apptainer]
+                              # Full pipeline, locally (cached: skips runs already done)
+uv run invoke run … --scheduler slurm   # Write Slurm scripts in <output>/slurm/ instead of running
+uv run invoke run … --force   # Clean everything first, then run from scratch
+uv run invoke prepare-images --containers PATH   # Build .sif files once (cluster login node)
+uv run invoke run-smoke --bids PATH --containers PATH   # 1 T1w × SynthStrip, end to end
 uv run invoke verify          # Check code, config, data and docs still agree
-uv run invoke clean           # Remove output_data/ contents
+uv run invoke clean           # Remove an output folder's computed contents
 uv run invoke --list          # Show all available tasks
 uv run pytest                 # Unit tests (tests/)
 uv run flake8                 # Linter (configured in setup.cfg)
@@ -41,20 +44,16 @@ uv run flake8                 # Linter (configured in setup.cfg)
 
 **Always read `tasks.py` first** before proposing or implementing any pipeline change — it is the authoritative source of what tasks exist, how they are wired, and what parameters they accept.
 
-**Execution flow:** `invoke run` triggers the project's analysis pipeline by calling each step in its body, in order. The permanent tasks — `fetch`, `run`, `verify`, `clean` — are always present; intermediate steps are project-specific.
+**Execution flow:** `invoke run` triggers the project's analysis pipeline by calling each step in its body, in order. The permanent tasks — `run`, `verify`, `clean` — are always present; intermediate steps are project-specific. The airoh template also has a `fetch` task; this project deliberately does not (see **No fetch step**).
 
 **`pre=` chains do not fire when a task is called as a function.** A `pre=` list only runs when invoke executes that task from the command line. `run(c)` or `clean(c)` called from Python executes the body alone — so a `clean` whose real work lives entirely in `pre=` deletes nothing when `run --force` calls it, silently and with a success message. Umbrella tasks that other tasks call therefore do their work in the body. Keep `pre=` only where the task is purely a command-line entry point (never called by another task), and remember that anything threading a flag through — `--force`, `--smoke`, a chunk selector — must call its steps directly, since a `pre=` chain has already run by the time the body sees the flag.
 
-**Fetching data — download or symlink:** each data asset in `files:` gets its own `fetch-{name}` task wrapping `airoh.acquisition.fetch_data`, which makes the asset available in one of two ways: **download** from its `url` (default), or **symlink** to already-present data when a source path is given — via `invoke fetch-{name} --source /path` (add `--copy` for a real copy) or a per-asset `source:` key in `invoke.yaml`. The umbrella `fetch` task calls every `fetch-{name}` and exposes a per-asset `--{name}-source` flag that it routes to the matching one. This avoids re-downloading data that already lives on disk (a shared dataset, a sibling repo). Symlinks handle both files and whole directories, and the operation is idempotent. When wiring fetch tasks for a new project, prefer `fetch_data` over the lower-level `download_data`.
+**No fetch step.** The airoh template gathers inputs with `fetch` tasks (download, or symlink into `source_data/`). This project removed them on purpose. It must run on cluster compute nodes without internet (Digital Research Alliance of Canada, among others), so it never downloads anything, and it reads its inputs in place: `--bids`, `--containers`, `--requirements`, with defaults under `inputs:` in `invoke.yaml`. `run-check` records what those paths resolved to (and their git commit when they are repositories) in `<output>/MANIFEST.json`, through airoh's `record_sources`. Do not reintroduce a download step, or a library that fetches resources at runtime (e.g. templateflow): anything a tool needs besides its image goes in the user's requirements folder.
 
-**One asset, one `--source`:** `fetch_data`'s `source` is a single path bound to the single asset named in the call — never a root directory joined with each asset's filename. That is why each asset gets its own `fetch-{name}` task with its own `--source`, and the umbrella `fetch` routes named `--{name}-source` flags rather than one shared `--source`. Do **not** forward a single shared `--source` to several `fetch_data` calls: it links every asset to the same path and fails silently, printing a success line per asset and exiting 0.
-
-See **Data** below for datalad datasets, sensitive data, and recording asset versions.
-
-- `invoke.yaml` — all path and data config (`output_data_dir`, `source_data_dir`, `tools_dir`, `files:` for data assets — each with `output_file` plus `url` to download and/or `source` to symlink)
-- `tasks.py` — project-specific invoke tasks; imports reusable tasks from `airoh` (`airoh.acquisition` for data fetching, `airoh.utils` for general helpers)
+- `invoke.yaml` — config: `inputs:` (defaults for --bids, --containers, --requirements), `output_data_dir` (default --output), `tools_dir`, the report's plausible volume range, provenance file names
+- `tasks.py` — project-specific invoke tasks; uses `airoh.provenance` (input and run records) and `airoh.verify`
 - `analysis/` — pure Python analysis logic, called by tasks in `tasks.py`
-- `tools/` — one YAML per skull-stripping tool (see **Skullstrip Bench specifics** below), plus a subfolder named after the tool for its annex files
+- `tools/` — one YAML per skull-stripping tool, and nothing else (see **Skullstrip Bench specifics** below)
 - `tests/` — pytest unit tests for the pure logic in `analysis/`
 - `source_data/CONTENT.md` and `output_data/CONTENT.md` — authoritative docs for what each data folder contains; update these when data assets change, do not duplicate their content elsewhere
 - `.claude/skills/` — each skill exists twice: as a directory (the source you edit) and as a `.zip` (what gets copied into projects created from this template). **Re-zip after editing a skill**, or projects keep receiving the old version — this has already happened once: `cd .claude/skills && zip -qr <name>.zip <name> -x '*/.*'`
@@ -71,10 +70,9 @@ See **Data** below for datalad datasets, sensitive data, and recording asset ver
 When results start looking stale or inconsistent, reach for `--force` rather than trying to reason about what is cached. Do not add content-hash invalidation or a dependency graph to `run`; that is the workflow-engine road, and this template deliberately stops short of it.
 
 **Task naming conventions:**
-- Fetch tasks are named `fetch-{name}` (e.g. `fetch-bids`), one per data asset; the umbrella `fetch` calls them all and routes a `--{name}-source` flag to each.
 - Analysis tasks are named `run-{name}` (e.g. `run-preprocessing`, `run-model`).
 - Cleaning tasks mirror them: `clean-{name}` removes only the outputs of the corresponding step. Granular clean tasks are what make a selective re-run possible, so every run step needs one.
-- The top-level `clean` task calls all `clean-{name}` tasks for **analysis** steps in its body — it only ever touches `output_data/`. Source assets have their own mirrored `clean-{name}` tasks (e.g. `clean-bids`) plus an umbrella `clean-source`, kept separate from `clean` since removing a source asset is a deliberate act (e.g. before re-pointing a stale symlink with `fetch-{name} --source`), not something `run --force` should ever do implicitly.
+- The top-level `clean` task calls all `clean-{name}` tasks in its body — it only ever touches the output folder (`--output`), never the inputs, which are read in place.
 - The top-level `run` task calls all steps in its body, in order.
 - `verify` checks the project against its own documentation; see **Verification**.
 
@@ -82,7 +80,7 @@ When results start looking stale or inconsistent, reach for `--force` rather tha
 
 ## Skullstrip Bench specifics
 
-**Validation is separate from processing.** `run-check` verifies everything up front and writes `output_data/plan.json`: the engine, the usable tool configs, and one entry per (T1w × tool) run with every path it reads or writes already decided (`t1w`, `mask`, `record`, `log`, `work_dir`). `run-skullstrip` executes that plan blindly. Its code assumes valid inputs and must stay extremely simple: one `try`/`except` per run, no re-validation. A new check belongs in `run-check`, not in the processing code. `run-check` and `run-metrics` are the deliberate exceptions to existence-based caching: both always re-run. `run-check` is cheap and must see a newly added tool or image. `run-metrics` takes seconds, and the consensus (hence every Dice) changes whenever a run is added, so a cached table would silently go stale.
+**Validation is separate from processing.** `run-check` verifies everything up front and writes `<output>/plan.json`: the input paths, the engine, the scheduler, the participants (`subjects`), the usable tool configs, and one entry per (T1w × tool) run with every path it reads or writes already decided (`t1w`, `mask`, `record`, `log`, `work_dir`). `run-skullstrip` executes that plan blindly. Its code assumes valid inputs and must stay extremely simple: one `try`/`except` per run, no re-validation. A new check belongs in `run-check`, not in the processing code. The dataset check is **shallow on purpose** (folder layout only, no image opened) so it takes seconds on a huge dataset; a broken T1w just fails its own run. Without `--tools`, the tools are the images found in `--containers` that have a config in `tools/` and whose `requires` files are present; other images are reported "not compatible" and skipped. `run-check` and `run-metrics` are the deliberate exceptions to existence-based caching: both always re-run. `run-check` is cheap and must see a newly added tool or image. `run-metrics` takes seconds, and the consensus (hence every Dice) changes whenever a run is added, so a cached table would silently go stale.
 
 **The report** (`analysis/report.py`, `analysis/report_figures.py`, `analysis/report_template.html`) uses nilearn `plot_anat` plus `add_contours`, deliberately not niworkflows' `SimpleShowMaskRPT` (as in HALFpipe), whose nipype/templateflow stack can download templates. Slices are chosen from the T1w alone, so every tool is shown on the same slices. Each run's picture is drawn once and saved twice, as JPEG: a thumbnail for the grid (output_data/figures/TOOL/STEM.jpg) and a 300 dpi version (STEM_full.jpg, about 2 px per 1 mm voxel) that only the zoom viewer shows, with wheel zoom, drag, and arrow keys that move to the neighbouring cell at the same zoom and position. Both are cached and belong to their mask: `clean-skullstrip --tools x` removes it too. The HTML is rebuilt on every `run-report`. The template is filled by `string.Template`, so a literal dollar sign in it must be doubled. Its JavaScript is plain ES5 with no external resources, so the file works offline and can be shared alone.
 
@@ -90,38 +88,57 @@ When results start looking stale or inconsistent, reach for `--force` rather tha
 
 **Engine logic lives only in `analysis/launcher.py`.** Docker (`docker run --rm --platform linux/amd64 --entrypoint "" -v …`) and Apptainer (`apptainer exec --compat --bind …`) are at parity, auto-detected (Apptainer first) or forced with `run-check --engine`. Images are never downloaded: Docker `docker load -i <name>.tar` if the image is not loaded yet; Apptainer uses `<name>.sif`, building it once from `<name>.tar` (`apptainer build <name>.sif docker-archive://<name>.tar`) inside the containers folder and keeping it. Containers write only into mounted folders. Dev machine: macOS (Apple Silicon) + Docker, so amd64 images run emulated; Apptainer is tested in a Lima VM and on the cluster.
 
-**Adding a tool = one YAML in `tools/` + one image in the containers folder.** Keys: `name` (must equal the file name), `image` (Docker reference), `container` (image file base name), `command` (the full command, with placeholders `{input}`, `{mask}`, `{output_prefix}`, `{tool_dir}` resolved to container paths), optional `mask_output` (default `{mask}`), `postprocess` (`labels_to_mask`) and `timeout_min`. When the timeout runs out, the run is recorded as `timeout`. A Docker container is named so the launcher can `docker kill` it, because killing `docker run` alone leaves the container running in the VM. A dead Docker VM makes `docker run` hang rather than fail, which is what the timeout guards against. Do not write `${VAR}` in a command, since braces are placeholders; `$VAR` is expanded by the shell inside the container. `run-check` reports a config without an image and an image without a config.
+**Adding a tool = one YAML in `tools/` + one image in the containers folder** (+ its files in the requirements folder, if any). Keys: `name` (must equal the file name), `image` (Docker reference), `container` (image file base name), `command` (the full command, with placeholders `{input}`, `{mask}`, `{output_prefix}`, `{requirements}`, `{threads}` resolved to container paths/values). Optional keys: `mask_output` (default `{mask}`), `postprocess` (`labels_to_mask`), `requires` (file names expected in `<requirements>/<name>/`, mounted read-only as `{requirements}`), `timeout_min`, and the cluster resources of one run: `cpus`, `mem_gb`, `minutes`. Nothing but YAML lives in `tools/`. The launcher caps threads in every container through `OMP_NUM_THREADS` and `ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS` (`--threads`, default `$SLURM_CPUS_PER_TASK`, else all cores). When the timeout runs out, the run is recorded as `timeout`. A Docker container is named so the launcher can `docker kill` it, because killing `docker run` alone leaves the container running in the VM. A dead Docker VM makes `docker run` hang rather than fail, which is what the timeout guards against. Do not write `${VAR}` in a command, since braces are placeholders; `$VAR` is expanded by the shell inside the container. The README's "Compatible containers" table must list every tool in `tools/`.
+
+**Running on a cluster: `run --scheduler slurm`** (`analysis/slurm.py`) runs only the check, then writes `<output>/slurm/`: `jobs.txt` (one participant per line, `sub-XX`), `skullstrip_array.sh` (array task N = participant on line N, every tool in sequence, then its report pictures via `run-figures`), `skullstrip_report.sh` (`run-aggregate`: metrics, report, provenance) and `submit.sh` (chains the report with `--dependency=afterany`, and refuses while `--account` is still `def-CHANGEME`). The user edits `--account` and `--array` (how many participants: a pilot `1-20`, all `1-N`, throttled `1-N%50`). Array resources: max `cpus`/`mem_gb` of the selected tools; walltime = (sum of per-tool minutes × the most T1w any participant has) × 1.5 + 10 min, rounded up to 15 min, where measured Apptainer durations in `<output>/runs/` replace the YAML `minutes`. In slurm mode the engine is always Apptainer, and every `.sif` must already exist (`prepare-images`, on a login node): array tasks must never build images concurrently. Tasks work on `$SLURM_TMPDIR` (`--work-root`) so only masks, logs and records reach the shared filesystem.
 
 **Tool-specific notes.**
 - SynthSeg outputs a segmentation: `labels_to_mask` (`analysis/postprocess.py`) keeps label > 0, CSF included as in SynthStrip's default, then resamples it nearest-neighbour onto the T1w grid.
-- ANTs (`antsBrainExtraction.sh`) needs the OASIS template that `fetch-ants-template` downloads into `tools/ants/template/`. It is the project's only download, because it is tool configuration rather than data.
+- ANTs (`antsBrainExtraction.sh`) needs three files of the OASIS template (`ants.yaml`, `requires:`) in `<requirements>/ants/`. The user gets them once from the ANTs templates on figshare, on a machine with internet.
 - Under Docker on Apple Silicon, SynthSeg (TensorFlow) needs more than 8 GB in the Docker VM. With 8 GB the VM crashed outright, and `docker run` then hangs instead of failing: give Docker 12 GB and enable Rosetta emulation.
 
 **BIDS parsing is a small hand-written parser** (`analysis/bids_inputs.py`, adapted from wonkyconn), not pybids. A T1w's `stem` (its filename without `_T1w.nii.gz`) keeps every entity, so derivative names stay unique across sessions, runs and acquisitions. Subjects without a T1w are reported and skipped, not an error.
 
-**Chunk concept: one run = one (T1w × tool).** Selectors: `--subjects` and `--tools` (comma-separated). A run's JSON record (output_data/runs/TOOL/STEM.json) is its "already done" marker. Failed runs are recorded and skipped too (a slow ANTs run that ran out of memory must not be relaunched on every `invoke run`); retry them with `run-skullstrip --retry-failed` or `clean-skullstrip --tools <name>`.
+**Chunk concepts: one run = one (T1w × tool); one cluster array task = one participant (all tools).** Selectors: `--subjects` and `--tools` (comma-separated). A run's JSON record (OUTPUT/runs/TOOL/STEM.json) is its "already done" marker. Failed runs are recorded and skipped too (a slow ANTs run that ran out of memory must not be relaunched on every `invoke run`); retry them with `run-skullstrip --retry-failed` or `clean-skullstrip --tools <name>`.
 
-**Build order (validate each stage with the user before the next):** structure + `run-check` ✔ → `run-skullstrip` + smoke test ✔ → full run SynthStrip + BET (+ metrics) ✔ → HTML report ✔ → SynthSeg ✔ → ANTs ✔ → user-facing CLI (next, see below).
+**Build order (validate each stage with the user before the next):** structure + `run-check` ✔ → `run-skullstrip` + smoke test ✔ → full run SynthStrip + BET (+ metrics) ✔ → HTML report ✔ → SynthSeg ✔ → ANTs ✔ → user-facing CLI + Slurm mode ✔ → cluster pilot (next).
 
 ## Status and next session
 
-**Where things stand (2026-10-06).** All four tools work end to end under Docker on the dev Mac. The last full run was 5 subjects × {SynthStrip, FSL BET, SynthSeg, ANTs}: 20/20 runs `ok`, and the report has a zoomable high-resolution viewer. Measured under amd64 emulation, per T1w: BET ≈ 7 s, SynthStrip ≈ 17 s, SynthSeg 3–5 min, ANTs ≈ 6.5 min. Apptainer is still untested (planned in a Lima VM and on the cluster).
+**Where things stand (2026-10-07).**
+- All four tools work end to end under Docker on the dev Mac. The 2026-10-06 full run was 5 subjects × 4 tools: 20/20 runs `ok`. Measured under amd64 emulation, per T1w: BET ≈ 8 s, SynthStrip ≈ 17 s, SynthSeg 3–5 min, ANTs ≈ 6.5 min.
+- The user-facing command line is in place:
+  - flags `--bids`, `--containers`, `--requirements`, `--output`, `--tools`, `--subjects`, `--engine`, `--scheduler`;
+  - a shallow dataset check, and no `fetch` (nothing is ever downloaded);
+  - `container_requirements/<tool>/` with `requires:`;
+  - `{threads}`, and the Slurm mode.
+- The Slurm mode was tested locally only: script generation, `bash -n`, the `submit.sh` guard, and a simulated array task under Docker with fake `SLURM_*` variables.
+- **Neither Apptainer nor Slurm has run for real yet.**
 
-**Local testing uses only the fast tools.** On the dev Mac, run SynthStrip and FSL BET only (e.g. `--tools synthstrip,fsl-bet`). Never launch SynthSeg or ANTs locally again: they are validated, and they are slow and memory-hungry under emulation.
+**Local testing uses only the fast tools.** On the dev Mac, run SynthStrip and FSL BET only (`--tools synthstrip,fsl-bet`). Never launch SynthSeg or ANTs locally again: they are validated, and they are slow and memory-hungry under emulation. To test Slurm generation without `.sif` files, point `--containers` at a scratch folder of empty `<name>.sif` files: the check only tests that they exist.
 
-**Next: a user-facing command line.** Agreed with the user, not implemented yet. The target is Compute Canada (among others), where compute nodes have **no internet access**: the tool must never download anything.
-1. One entry point with flags: `invoke run --bids PATH --containers PATH --requirements PATH --output PATH [--tools a,b] [--engine docker|apptainer] [--subjects …]`. Defaults may live in `invoke.yaml`; `--output` defaults to `output_data/`, and every output path (plan, derivatives, runs, logs, work, figures, metrics, report, provenance) moves under it.
-2. `--tools` empty → loop over the images in `--containers` and process every compatible one. "Compatible" means a YAML exists in tools/ for the image and its declared requirements are present. Report the others as "not compatible" and skip them.
-3. The `run-check` dataset check becomes **shallow**: `dataset_description.json`, `sub-*` folders, and T1w files found under each subject's anat folder (sessions allowed). It no longer opens any image, so drop `check_t1w` from the check and its tests. A corrupt T1w just fails its run. Mask validation after each run stays.
-4. **Remove `fetch` entirely**: `fetch`, `fetch-bids`, `fetch-containers`, `fetch-ants-template` and their `clean-*` tasks, plus the `files:` entries. `--bids` and `--containers` are used directly (no symlinks into `source_data/`); record the paths used (and their git commit when they are repos) in `plan.json` and the provenance file. Explain in this file why the project departs from the airoh template here.
-5. **container_requirements/** (planned, does not exist yet): a user-provided folder (`--requirements`) with one subfolder per tool (container_requirements/TOOL/) holding whatever the tool needs besides its image: atlases, templates, config files. It is mounted read-only and reached through a `{requirements}` placeholder, which replaces `{tool_dir}`. Each YAML lists the files it needs under a new `requires:` key, and `run-check` only checks they exist. Nothing annex is versioned in the repo any more: delete `tools/ants/` and `tools/.gitignore`. ANTs needs the 3 OASIS files currently in `tools/ants/template/` (`T_template0.nii.gz`, `…BrainCerebellumProbabilityMask.nii.gz`, `…BrainCerebellumRegistrationMask.nii.gz`). Open question for the user: move them to `…/TRAVAIL_DOCTORAT/containers/container_requirements/ants/`?
-6. **README: a table of compatible containers.** For each tool: Docker image and expected file name, how to obtain it once on a machine with internet (`docker pull … && docker save -o <container>.tar …`), required files in `container_requirements/<tool>/` and where to get them, typical runtime, special needs (SynthSeg needs about 12 GB in the Docker VM).
+**User's local paths (dev Mac):**
+- dataset: `/Users/pierrebergeret/Documents/TRAVAIL_DOCTORAT/sample_ds30`;
+- images: `/Users/pierrebergeret/Documents/TRAVAIL_DOCTORAT/containers/skullstrip`;
+- requirements: `/Users/pierrebergeret/Documents/TRAVAIL_DOCTORAT/containers/container_requirements` (holds `ants/` with the three OASIS files).
 
-**Lessons from the dev Mac (Docker Desktop).** Both Docker crashes during the session came from the **Mac's disk being full** ("no space left on device"; the Docker VM disk alone is about 37 GB), not from the tools. Memory still matters: SynthSeg also needs the Docker VM raised from 8 to 12 GB. When the VM dies, Docker Desktop stays half alive and the icon does nothing: quit the app, kill the leftover `com.docker.backend` processes, then `open -a Docker`. Never click "Reset to factory defaults", which deletes every loaded image.
+**Next.**
+1. **Apptainer for real**, in a Lima VM or on the cluster: `prepare-images`, then a local Apptainer run of the fast tools.
+2. **Cluster pilot**: `--scheduler slurm`, `--array=1-20`, then `seff` for real memory and time. Regenerate afterwards: the measured durations replace the YAML estimates.
+3. **Report for large datasets.** One self-contained HTML is about 5 MB per participant with 4 tools, so it cannot scale to thousands. Paginate (e.g. 20–50 participants per page plus an index), and probably put suspicious cases first (implausible volume, low Dice, failures).
+4. Possibly: `clean-skullstrip --subjects`, and a `--retry-failed` option in the generated array script.
+
+**Lessons from the dev Mac (Docker Desktop).**
+- Both Docker crashes on 2026-10-06 came from the **Mac's disk being full** ("no space left on device"; the Docker VM disk alone is about 37 GB). Check `df -h` before long runs.
+- SynthSeg also needs the Docker VM raised from 8 to 12 GB.
+- When the VM dies, Docker Desktop stays half alive and the icon does nothing: quit the app, kill the leftover `com.docker.backend` processes, then `open -a Docker`.
+- Never click "Reset to factory defaults": it deletes every loaded image.
 
 ## Data
 
 ### Where data lives
+
+> In this project, the inputs are not in `source_data/` (it stays empty): they are read in place from `--bids`, `--containers` and `--requirements` (see **No fetch step**). The template's general guidance below still applies to what is committed and how outputs are tracked. Its parts about fetching and datalad do not apply here.
 
 `source_data/` holds inputs and nothing else; `output_data/` holds what the
 pipeline computed. Neither is a scratch directory — a file that is neither a
@@ -194,13 +211,13 @@ Three things bite projects working with real datalad superdatasets:
   `git-annex` PyPI package bundles a recent binary) instead of writing a README
   note nobody reads.
 
-**Gathering assets is a separate job from reproducing results.** `fetch`
-retrieves; `run` reads what is already on disk and never pulls. That split is
-what makes `run` fast, offline-capable, and honest about what it depends on. A
-`run` that quietly re-fetches on demand is slow in a way nobody can diagnose,
-and hides the fact that a result was produced from data that arrived halfway
-through. If a step finds its input missing, it should say so and point at
-`invoke fetch` — not fix it silently.
+**Gathering assets is a separate job from reproducing results.** In the
+template, `fetch` retrieves and `run` reads what is already on disk and never
+pulls; in this project nothing is ever retrieved, the user gathers the inputs
+beforehand. Either way, a `run` that quietly downloads on demand is slow in a
+way nobody can diagnose, and hides the fact that a result was produced from
+data that arrived halfway through. If a step finds its input missing, it should
+say so — not fix it silently.
 
 ### Sensitive and restricted data
 
@@ -221,8 +238,9 @@ erasable in practice once pushed.
 
 ### Recording asset versions
 
-`fetch` writes `source_data/MANIFEST.json` and `run` writes
-`output_data/PROVENANCE.json` (see `airoh.provenance`). Between them they record
+`run-check` writes `<output>/MANIFEST.json` and `run` writes
+`<output>/PROVENANCE.json` (see `airoh.provenance`; in the template, `fetch`
+writes the manifest). Between them they record
 what each input actually resolved to — including the commit of a symlinked
 external checkout — and what produced the current outputs: the project's own
 commit and dirty flag, the environment, the manifest consumed, and a checksum

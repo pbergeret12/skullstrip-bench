@@ -1,41 +1,12 @@
 """
-Sanity checks on a T1w image, run by `run-check` before anything is launched.
+Validation of a tool's mask, right after its run: the mask must exist, be
+binary, and sit on the same grid as the T1w it was computed from.
+
+There is deliberately no check of the T1w images themselves: `run-check` stays
+shallow (folder layout only), and a broken T1w just fails its own run.
 """
 import nibabel as nib
 import numpy as np
-
-# Generous bounds: they catch a broken header, not an unusual protocol.
-DIMENSION_RANGE = (32, 1024)
-VOXEL_SIZE_RANGE_MM = (0.2, 5.0)
-
-
-def check_t1w(path):
-    """
-    Return `(problem, summary)` for one T1w image.
-
-    `problem` is None when the image is usable, else a short explanation.
-    `summary` describes the grid, e.g. `256×256×176, 1.0×1.0×1.2 mm`.
-    """
-    try:
-        image = nib.load(path)
-        shape = image.shape
-        affine = image.affine
-    except Exception as error:  # any unreadable file, whatever nibabel raises
-        return f"cannot be read ({error})", ""
-
-    voxel_sizes = nib.affines.voxel_sizes(affine)
-    summary = ("×".join(str(size) for size in shape) + ", "
-               + "×".join(f"{size:.1f}" for size in voxel_sizes) + " mm")
-
-    if len(shape) != 3:
-        return f"is {len(shape)}D, expected 3D", summary
-    if not np.all(np.isfinite(affine)) or np.isclose(np.linalg.det(affine[:3, :3]), 0):
-        return "has an invalid affine", summary
-    if not all(DIMENSION_RANGE[0] <= size <= DIMENSION_RANGE[1] for size in shape):
-        return "has implausible dimensions", summary
-    if not all(VOXEL_SIZE_RANGE_MM[0] <= size <= VOXEL_SIZE_RANGE_MM[1] for size in voxel_sizes):
-        return "has implausible voxel sizes", summary
-    return None, summary
 
 
 def check_mask(mask_path, t1w_path):

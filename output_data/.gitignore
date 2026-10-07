@@ -6,6 +6,7 @@ runs/
 logs/
 work/
 figures/
+slurm/
 *.png
 *.jpg
 *.csv
@@ -18,3 +19,4 @@ figures/
 
 # Provenance is a tracked output: it records what produced everything else.
 !PROVENANCE.json
+!MANIFEST.json

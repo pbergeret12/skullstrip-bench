@@ -27,7 +27,7 @@ MAX_ERROR_CHARACTERS = 600
 def build_report(runs_dir, metrics_csv, figures_dir, output_html, plausible_volume_ml):
     """Draw the missing figures, then write the report."""
     records = {(record["stem"], record["tool"]): record for record in load_records(runs_dir)}
-    draw_missing_figures(records, figures_dir)
+    draw_figures(runs_dir, figures_dir)
 
     metrics = pd.read_csv(metrics_csv).set_index(["stem", "tool"])
     tools = sorted({tool for _, tool in records})
@@ -53,9 +53,15 @@ def figure_paths(figures_dir, stem, tool):
     return folder / f"{stem}.jpg", folder / f"{stem}_full.jpg"
 
 
-def draw_missing_figures(records, figures_dir):
-    """Draw the pictures of every successful run that does not have them yet."""
-    for (stem, tool), record in sorted(records.items()):
+def draw_figures(runs_dir, figures_dir, subjects=None):
+    """
+    Draw the pictures of every successful run that does not have them yet,
+    optionally only for some subjects (a cluster array task draws its own).
+    """
+    for record in load_records(runs_dir):
+        stem, tool = record["stem"], record["tool"]
+        if subjects and record["subject"] not in subjects:
+            continue
         thumbnail_file, full_file = figure_paths(figures_dir, stem, tool)
         if record["status"] == "ok" and not full_file.is_file():
             print(f"🖼️  {tool} × {stem}")
