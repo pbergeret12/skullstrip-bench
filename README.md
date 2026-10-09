@@ -175,7 +175,7 @@ A container is compatible when `tools/` has a config for it. To run, its image m
 | ---- | ----- | --------------------------- | ------ | -------------------------------------- | ----------------- |
 | `synthstrip` | `freesurfer/synthstrip:1.8` | `synthstrip_1.8.tar` or `.sif` | brain mask (CSF included) | about 17 s | 4 CPUs, 8 GB |
 | `fsl-bet` | `gamorosino/fsl:6.0.7.22` | `fsl_6.0.7.22.tar` or `.sif` | brain mask (`bet -m -R`) | about 8 s | 1 CPU, 2 GB |
-| `synthseg` | `cookpa/synthseg:conda-0.2` | `synthseg_conda-0.2.tar` or `.sif` | segmentation turned into a mask: every label above 0 (CSF included), resampled onto the T1w grid | 3 to 5 min | 8 CPUs, 16 GB |
+| `synthseg` | `cookpa/synthseg:conda-0.2` | `synthseg_conda-0.2.tar` or `.sif` | segmentation (`--robust`) turned into a mask as in our HALFpipe pipeline: every label except the CSF around the brain (24), resampled onto the T1w grid | about 2 min on a cluster node | 8 CPUs, 16 GB |
 | `ants` | `antsx/ants:latest` | `ants_latest.tar` or `.sif` | `antsBrainExtraction.sh` mask, with the OASIS template bundled in `container_requirements/ants/` | about 6.5 min | 8 CPUs, 8 GB |
 
 On a machine with Docker, an image becomes a `.tar` with `docker pull <image> && docker save -o <file name>.tar <image>`; on a cluster, build the `.sif` directly as shown in [Preparing the images](#preparing-the-images).
@@ -197,7 +197,7 @@ image: someone/mytool:2.0           # Docker reference
 container: mytool_2.0               # <containers>/mytool_2.0.tar or .sif
 command: mytool --in {input} --mask {mask} --threads {threads}
 # mask_output: "{output_prefix}_mask.nii.gz"   # if the tool picks its own mask name
-# postprocess: labels_to_mask                    # if the tool outputs a segmentation
+# postprocess: labels_to_mask                    # if the tool outputs a segmentation (or synthseg_brain_mask)
 # requires: [atlas.nii.gz]                       # files in container_requirements/mytool/
 timeout_min: 30                     # stop a run stuck for 30 minutes
 cpus: 4                             # cluster resources for one run

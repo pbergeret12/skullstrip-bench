@@ -1,12 +1,12 @@
-# SynthSeg: whole-brain segmentation (not a mask). labels_to_mask keeps every
-# labelled voxel (CSF included) and resamples it onto the T1w grid, since
-# SynthSeg works at 1 mm.
+# SynthSeg: whole-brain segmentation (not a mask), run as in our HALFpipe
+# pipeline: --robust, then every label except the CSF around the brain (24)
+# becomes the mask, resampled onto the T1w grid (SynthSeg works at 1 mm).
 name: synthseg
 image: cookpa/synthseg:conda-0.2
 container: synthseg_conda-0.2
-command: python /opt/SynthSeg/scripts/commands/SynthSeg_predict.py --i {input} --o {output_prefix}_seg.nii.gz --cpu --threads {threads}
+command: python /opt/SynthSeg/scripts/commands/SynthSeg_predict.py --i {input} --o {output_prefix}_seg.nii.gz --robust --cpu --threads {threads}
 mask_output: "{output_prefix}_seg.nii.gz"
-postprocess: labels_to_mask
+postprocess: synthseg_brain_mask
 # A stuck run is stopped and recorded as `timeout`.
 timeout_min: 120
 # Cluster resources for one run: TensorFlow needs well over 8 GB.

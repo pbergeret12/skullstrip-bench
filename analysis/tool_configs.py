@@ -8,7 +8,7 @@ A tool config looks like:
     container: synthstrip_1.8           # <containers>/synthstrip_1.8.tar or .sif
     command: mri_synthstrip -i {input} -m {mask} -t {threads}
     mask_output: "{mask}"               # optional: where the tool writes its mask
-    postprocess: labels_to_mask         # optional: turn the output into a mask
+    postprocess: labels_to_mask         # optional: output → mask (or synthseg_brain_mask)
     requires: [atlas.nii.gz]            # optional: files in container_requirements/<name>/
     timeout_min: 30                     # optional: stop a run after 30 minutes
     cpus: 4                             # cluster resources for one run
@@ -30,7 +30,7 @@ OPTIONAL_KEYS = ("mask_output", "postprocess", "requires", "timeout_min",
                  "cpus", "mem_gb", "minutes")
 NUMBER_KEYS = ("timeout_min", "cpus", "mem_gb", "minutes")
 PLACEHOLDERS = {"input", "mask", "output_prefix", "requirements", "threads"}
-POSTPROCESSES = {"labels_to_mask"}  # implemented in analysis/postprocess.py
+POSTPROCESSES = {"labels_to_mask", "synthseg_brain_mask"}  # in analysis/postprocess.py
 DEFAULT_RESOURCES = {"cpus": 1, "mem_gb": 4, "minutes": 10}
 
 
