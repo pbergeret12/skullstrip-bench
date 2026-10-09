@@ -19,12 +19,19 @@ run's status) and logs/TOOL/STEM.err (the container's errors, ending with why
 the run failed if it did). With `--scheduler slurm`, logs/slurm/ holds the
 jobs' own .log and .err.
 
+`slurm/`, only with `--scheduler slurm` (running on an HPC): the generated
+sbatch scripts for the user to edit and submit. jobs.txt has one participant
+per line; skullstrip_array.sh is the job array (task N processes line N,
+`--array=1-N` covers everyone, `--account=def-CHANGEME` is to be replaced
+with the user's allocation); skullstrip_report.sh rebuilds metrics and
+report once the array has ended; submit.sh submits both.
+
 Everything else is internal to the tool and lives in the hidden folder
 .skullstrip-bench/: the plan written by `run-check`, one record per run (its
 status, duration and error, and the marker that lets a repeated run skip it),
 the validated masks (kept to recompute the Dice when a run is retried or a
 tool added), the per-participant parts from which metrics.csv and report.html
-are rebuilt, the generated Slurm scripts, and the provenance records
+are rebuilt, and the provenance records
 MANIFEST.json (what each input path resolved to) and PROVENANCE.json (what
 produced the outputs). The raw files each tool writes are deleted at the end
 of its run.

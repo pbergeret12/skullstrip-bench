@@ -1,8 +1,7 @@
 """
 `run --scheduler slurm`: write ready-to-edit Slurm scripts instead of running.
 
-Nothing is submitted. In the output's internal state folder
-(`.skullstrip-bench/slurm/`) this writes:
+Nothing is submitted. In `<output>/slurm/` this writes:
 - `jobs.txt` — one participant per line (`sub-XX`); array task N handles line N;
 - `skullstrip_array.sh` — the job array: one task = one participant, every
   selected tool run on all of that participant's T1w images, then that
@@ -11,8 +10,9 @@ Nothing is submitted. In the output's internal state folder
   provenance record, once the array has ended;
 - `submit.sh` — submits both, chaining the report after the array.
 
-The account and the array range (how many participants to launch) are taken
-from --slurm-account / --slurm-array, or left for the user to edit. Resources
+The user then edits the sbatch scripts: `--account` (their allocation, left
+as def-CHANGEME) and, if they want fewer than all participants, `--array`
+(every line of jobs.txt by default). Resources
 come from the tools' YAML (`cpus`, `mem_gb`, `minutes`), or from durations
 already measured with Apptainer.
 
@@ -26,7 +26,7 @@ import os
 import shlex
 from collections import Counter
 
-from analysis.layout import logs_path, state_path
+from analysis.layout import logs_path, slurm_path, state_path
 from datetime import date
 from pathlib import Path
 
@@ -38,10 +38,10 @@ REPORT_MINUTES_PER_RUN = 0.05       # embedding pictures and metrics, per run
 REPORT_BASE_MINUTES = 30
 
 
-def write_slurm_files(plan, repo_dir, invoke_bin, command_line, account=None, array=None):
+def write_slurm_files(plan, repo_dir, invoke_bin, command_line):
     """Write the Slurm files for `plan`, return the folder they are in."""
     output_dir = Path(plan["output_dir"]).resolve()
-    slurm_dir = state_path(output_dir, "slurm")
+    slurm_dir = slurm_path(output_dir)
     slurm_dir.mkdir(parents=True, exist_ok=True)
     logs_path(output_dir, "slurm").mkdir(parents=True, exist_ok=True)
     jobs_file = slurm_dir / "jobs.txt"
@@ -50,8 +50,6 @@ def write_slurm_files(plan, repo_dir, invoke_bin, command_line, account=None, ar
     resources = participant_resources(plan)
     context = {
         **tool_invocation(plan, repo_dir, invoke_bin),
-        "account": account or ACCOUNT_PLACEHOLDER,
-        "array": array or f"1-{len(plan['subjects'])}",
         "output": shlex.quote(str(Path(plan["output_dir"]).resolve())),
         "logs": logs_path(output_dir, "slurm"),
         "jobs": shlex.quote(str(jobs_file)),
@@ -147,8 +145,8 @@ def array_script(n_subjects, resources, context):
 # every selected tool run on all of that participant's T1w images.
 {context['header']}#
 # BEFORE SUBMITTING
-#   1. --account must be your allocation (e.g. def-yourpi or rrg-yourpi), here and
-#      in skullstrip_report.sh (set it at generation with --slurm-account).
+#   1. Replace {ACCOUNT_PLACEHOLDER} with your allocation (e.g. def-yourpi or rrg-yourpi),
+#      here and in skullstrip_report.sh.
 #   2. Choose which participants to launch with --array (line numbers of jobs.txt):
 #        {f"--array=1-{n_subjects}":<20} every participant ({n_subjects} lines in jobs.txt)
 #        {f"--array=1-{min(20, n_subjects)}":<20} a pilot on the first {min(20, n_subjects)}
@@ -159,9 +157,9 @@ def array_script(n_subjects, resources, context):
 {per_tool}
 #   expected {resources['expected_minutes']} min, walltime with margin: {resources['minutes']} min
 # After a pilot, re-run the same command: measured durations replace estimates.
-#SBATCH --account={context['account']}
+#SBATCH --account={ACCOUNT_PLACEHOLDER}
 #SBATCH --job-name=skullstrip-bench
-#SBATCH --array={context['array']}
+#SBATCH --array=1-{n_subjects}
 #SBATCH --cpus-per-task={resources['cpus']}
 #SBATCH --mem={resources['mem_gb']}G
 #SBATCH --time={hours_minutes(resources['minutes'])}
@@ -194,8 +192,8 @@ def report_script(n_runs, context):
     return f"""#!/bin/bash
 # skullstrip-bench: metrics and HTML report, once every array task has ended.
 {context['header']}#
-# --account must be your allocation (set it at generation with --slurm-account).
-#SBATCH --account={context['account']}
+# Replace {ACCOUNT_PLACEHOLDER} with your allocation before submitting.
+#SBATCH --account={ACCOUNT_PLACEHOLDER}
 #SBATCH --job-name=skullstrip-bench-report
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=8G

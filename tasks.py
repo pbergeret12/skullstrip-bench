@@ -281,14 +281,9 @@ def run_aggregate(c, output=None):
             "engine": "Force a container engine: docker or apptainer (default: auto).",
             "scheduler": "local: run everything here (default). slurm: run nothing, "
                          "write job scripts in <output>/slurm/ instead.",
-            "slurm_account": "Slurm allocation written in the job scripts, e.g. def-yourpi "
-                             "(default: def-CHANGEME, to edit).",
-            "slurm_array": "Which lines of jobs.txt (participants) the array runs, e.g. 1-20 "
-                           "for a pilot or 1-500%50 (default: all).",
             "force": "Delete every computed output first, then run from scratch."})
 def run(c, bids=None, containers=None, output=None, tools=None,
-        subjects=None, engine=None, scheduler="local", slurm_account=None, slurm_array=None,
-        force=False):
+        subjects=None, engine=None, scheduler="local", force=False):
     """
     Full pipeline: check, then participant by participant: skullstrip runs,
     metrics, report update (the report grows as participants finish).
@@ -308,7 +303,7 @@ def run(c, bids=None, containers=None, output=None, tools=None,
     plan = run_check(c, bids=bids, containers=containers, output=output, tools=tools,
                      subjects=subjects, engine=engine, scheduler=scheduler)
     if scheduler == "slurm":
-        write_slurm(plan, slurm_account, slurm_array)
+        write_slurm(plan)
         return
     for subject in plan["subjects"]:
         run_skullstrip(c, output=output, subjects=subject)
@@ -317,7 +312,7 @@ def run(c, bids=None, containers=None, output=None, tools=None,
     print("all analyses completed")
 
 
-def write_slurm(plan, account=None, array=None):
+def write_slurm(plan):
     """Write the Slurm scripts and tell the user what to edit and run."""
     import sys
 
@@ -325,7 +320,7 @@ def write_slurm(plan, account=None, array=None):
 
     slurm_dir, resources = write_slurm_files(
         plan, repo_dir=PROJECT_DIR, invoke_bin=Path(sys.executable).parent / "invoke",
-        command_line=" ".join(sys.argv), account=account, array=array)
+        command_line=" ".join(sys.argv))
     print(f"\n📝 Slurm files written to {slurm_dir}/ (nothing submitted):")
     print(f"   jobs.txt              {len(plan['subjects'])} participants, one per line")
     print(f"   skullstrip_array.sh   one task per participant: {resources['cpus']} CPUs, "
@@ -333,10 +328,9 @@ def write_slurm(plan, account=None, array=None):
     print("   skullstrip_report.sh  final rebuild of metrics + report once the array has ended")
     print("   submit.sh             submits both")
     print(f"   job logs: {Path(plan['output_dir']) / 'logs' / 'slurm'}/ (.log and .err)")
-    if not account:
-        print("\nNext: in both .sh files replace def-CHANGEME with your allocation "
-              "(or pass --slurm-account).")
-    print(f"Check --array in skullstrip_array.sh, then run {slurm_dir / 'submit.sh'}")
+    print(f"\nNext: in skullstrip_array.sh and skullstrip_report.sh, replace def-CHANGEME "
+          f"with your allocation\n(and narrow --array if you want fewer than all "
+          f"{len(plan['subjects'])} participants), then run {slurm_dir / 'submit.sh'}")
 
 
 @task(help={**PATH_HELP})
@@ -465,7 +459,7 @@ def clean_slurm(c, output=None):
     """
     Remove the generated Slurm scripts and the jobs' logs.
     """
-    remove(state(c, output, "slurm"))
+    remove(output_path(c, output) / "slurm")
     remove(output_path(c, output) / "logs" / "slurm")
 
 

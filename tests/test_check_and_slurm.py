@@ -105,16 +105,15 @@ def test_slurm_files_one_participant_per_line(tmp_path):
     assert '--threads "$SLURM_CPUS_PER_TASK" --work-root "$SLURM_TMPDIR/work"' in array
     assert "run-aggregate" in (slurm_dir / "skullstrip_report.sh").read_text()
     assert f"--error={tmp_path / 'out' / 'logs' / 'slurm'}/array_%A_%a.err" in array
-    assert slurm_dir == tmp_path / "out" / ".skullstrip-bench" / "slurm"
+    assert slurm_dir == tmp_path / "out" / "slurm"   # visible: the user edits it
     assert "--dependency=afterany" in (slurm_dir / "submit.sh").read_text()
 
 
-def test_account_and_array_can_be_set_at_generation(tmp_path):
-    slurm_dir, _ = write_slurm_files(slurm_plan(tmp_path), tmp_path, "/env/bin/invoke", "cmd",
-                                     account="def-mypi", array="1-1")
-    array = (slurm_dir / "skullstrip_array.sh").read_text()
-    assert "#SBATCH --account=def-mypi" in array and "#SBATCH --array=1-1\n" in array
-    assert "def-CHANGEME" not in (slurm_dir / "skullstrip_report.sh").read_text()
+def test_account_is_left_for_the_user_and_array_covers_everyone(tmp_path):
+    slurm_dir, _ = write_slurm_files(slurm_plan(tmp_path), tmp_path, "/env/bin/invoke", "cmd")
+    for script in ("skullstrip_array.sh", "skullstrip_report.sh"):
+        assert "#SBATCH --account=def-CHANGEME" in (slurm_dir / script).read_text()
+    assert "#SBATCH --array=1-2\n" in (slurm_dir / "skullstrip_array.sh").read_text()
 
 
 def test_from_the_tool_container_jobs_rerun_the_same_image(tmp_path, monkeypatch):

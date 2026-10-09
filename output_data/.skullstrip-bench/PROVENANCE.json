@@ -32,7 +32,7 @@
       }
     },
     "manifest_file": "/Users/pierrebergeret/Documents/REPOS_GITHUB/skullstrip-bench/output_data/.skullstrip-bench/MANIFEST.json",
-    "manifest_sha256": "8574dca288ed3727d56a10cc08127bdf27b406cf01c8eb49466ebcd33cad0a6d"
+    "manifest_sha256": "a9d347bb5c748f025d1cd63d96cfd587b5c7fae6e7d28584313ee16e8b4dc312"
   },
   "outputs": {
     "logs/synthstrip/sub-10159.err": {
@@ -56,14 +56,14 @@
       "size_bytes": 131
     },
     "report/report.html": {
-      "sha256": "a9a1153e5f6267e1e8bc61030821e943623caaf8af62e11b5fd787fd965d5ca1",
+      "sha256": "18e672af530ed8d530ffdc910c138c4e89ca7b2e75eadebd1ccc4eab6c585936",
       "size_bytes": 1344999
     }
   },
-  "recorded_at": "2026-10-09T14:40:42+00:00",
+  "recorded_at": "2026-10-09T14:58:01+00:00",
   "repository": {
     "branch": "skullstrip-pipeline",
-    "commit": "a00920bef4be5f650851b49b0a104437d9e39898",
+    "commit": "1a646db52c7dd73c73e29c6c39583a090a5facd9",
     "dirty": true,
     "remote": "git@github.com:pbergeret12/skullstrip-bench.git",
     "toplevel": "/Users/pierrebergeret/Documents/REPOS_GITHUB/skullstrip-bench"

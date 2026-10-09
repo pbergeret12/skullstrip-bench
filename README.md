@@ -130,17 +130,16 @@ If the nested check fails, the job stops there (`set -e`) and its output shows A
 
 ### Running a whole dataset
 
-On a login node, the same image writes the job scripts without computing anything, then a single command submits them:
+`--scheduler slurm` is the flag that says the tool runs on an HPC. Without it, everything runs locally and the tool produces the report. With it, the tool computes nothing: after the check, it writes the Slurm scripts that process the participants in parallel. Run it on a login node:
 
 ```bash
 module load apptainer
 apptainer run --bind /path/bids,/path/containers,$SCRATCH/results skullstrip-bench.sif run \
     --scheduler slurm --bids /path/bids --containers /path/containers --output $SCRATCH/results \
-    --tools synthstrip,fsl-bet --slurm-account def-yourpi --slurm-array 1-20
-$SCRATCH/results/.skullstrip-bench/slurm/submit.sh
+    --tools synthstrip,fsl-bet
 ```
 
-This writes the following to the hidden `.skullstrip-bench/slurm/` folder, and the command prints the exact path of `submit.sh`. The jobs' own `.log` and `.err` go to `logs/slurm/`.
+This writes `<output>/slurm/`, and the command prints the exact path of `submit.sh`. The jobs' own `.log` and `.err` go to `logs/slurm/`.
 
 | File | Content |
 | ---- | ------- |
@@ -149,7 +148,7 @@ This writes the following to the hidden `.skullstrip-bench/slurm/` folder, and t
 | `skullstrip_report.sh` | A final rebuild of metrics and report, plus the provenance record, once the array has ended. |
 | `submit.sh` | Submits the array, then the report job with `--dependency=afterany`. It refuses to submit while the account is still `def-CHANGEME`. |
 
-`--slurm-array` chooses which lines of `jobs.txt` run: `1-20` for a pilot on the first 20 participants, `1-N` for all of them (the default), `1-N%50` for all with at most 50 at once. `--slurm-account` sets the allocation; both can also be edited in the scripts before submitting. The resources of one array task are filled in from the selected tools: the largest CPU and memory needs, since the tools run one after the other, and a walltime of the sum of their durations × 1.5 + 10 min. Durations come from each tool's YAML, or from durations already measured with Apptainer in that output folder, so after a pilot, generating the scripts again gives walltimes that fit the cluster. `seff <jobid>` shows the real memory peak.
+Before submitting, open `skullstrip_array.sh` and `skullstrip_report.sh` and replace `def-CHANGEME` with your allocation (for example `def-yourpi`). The array line, `#SBATCH --array=1-N`, runs every participant of `jobs.txt`; change it to `1-20` for a pilot on the first 20, or `1-N%50` to run at most 50 at once. Then submit with `<output>/slurm/submit.sh`. The resources of one array task are filled in from the selected tools: the largest CPU and memory needs, since the tools run one after the other, and a walltime of the sum of their durations × 1.5 + 10 min. Durations come from each tool's YAML, or from durations already measured with Apptainer in that output folder, so after a pilot, generating the scripts again gives walltimes that fit the cluster. `seff <jobid>` shows the real memory peak.
 
 ## Compatible containers
 
@@ -195,7 +194,7 @@ Inside the container, `{input}` is the T1w, `{mask}` where to write the mask, `{
 
 | Task               | Description |
 | ------------------ | ----------- |
-| `run`              | The whole pipeline: the check, then participant by participant the runs and the update of metrics and report. With `--scheduler slurm` it writes job scripts instead (`--slurm-account`, `--slurm-array`); `--force` cleans first. |
+| `run`              | The whole pipeline: the check, then participant by participant the runs and the update of metrics and report. With `--scheduler slurm` (running on an HPC) it writes the Slurm scripts to `slurm/` instead; `--force` cleans first. |
 | `run-check`        | Checks the dataset (shallow), tools, images, engine and output without running anything, and writes the plan and the input record (hidden state). Always re-runs. |
 | `run-skullstrip`   | Executes the plan, one container run per (T1w × tool); `--subjects`, `--tools`, `--retry-failed`, `--threads`, `--work-root`. |
 | `run-metrics`      | Updates `report/metrics.csv` (volume, Dice against the consensus, duration and status of each run) for `--subjects` (default all), from per-participant parts. Always re-runs. |
@@ -211,7 +210,7 @@ Inside the container, `{input}` is the T1w, `{mask}` where to write the mask, `{
 | `clean-skullstrip` | Removes the runs' logs, masks and records and their report pictures; `--tools` limits it to some tools. |
 | `clean-metrics`    | Removes `metrics.csv` and its parts. |
 | `clean-report`     | Removes the report, its parts and its pictures. |
-| `clean-slurm`      | Removes the generated Slurm scripts and the jobs' logs. |
+| `clean-slurm`      | Removes the generated Slurm scripts (`slurm/`) and the jobs' logs. |
 
 Every task that reads or writes results takes `--output` (default `output_data/`). `uv run invoke --list` and `uv run invoke --help <task>` give the details. The checks used during development are `uv run invoke run-smoke --bids … --containers …`, `uv run invoke verify`, `uv run pytest` and `uv run flake8`.
 

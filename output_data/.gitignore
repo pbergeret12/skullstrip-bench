@@ -2,6 +2,7 @@
 # participants' brains, and the metrics and logs are per-participant data.
 report/
 logs/
+slurm/
 
 # Internal state: ignored, except the two small provenance records, which say
 # what produced the outputs and from which inputs.
