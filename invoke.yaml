@@ -27,10 +27,6 @@ tools_dir: tools
 # adult brain range — adjust for children or atypical populations.
 report:
   plausible_volume_ml: [1100, 1600]
-  # Participants per report page (--per-page overrides it). Every picture is
-  # embedded, about 5 MB per participant with four tools: keep pages light
-  # enough for a browser. `run-report --per-page N` re-splits an existing report.
-  participants_per_page: 20
 
 # provenance records
 #

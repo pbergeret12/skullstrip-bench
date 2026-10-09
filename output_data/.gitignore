@@ -1,7 +1,6 @@
 # Everything the pipeline computes stays out of git: the report and its
 # figures show participants' brains, and the metrics are per-participant data.
 report.html
-pages/
 figures/
 metrics.csv
 

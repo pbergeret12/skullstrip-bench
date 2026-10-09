@@ -2,8 +2,7 @@
 Where everything goes. The one place that decides it, so that what the user
 sees stays exactly this:
 
-    <output>/report.html            the report's entry page, listing its pages
-    <output>/pages/                 the report's pages (see analysis/report_pages.py)
+    <output>/report.html            the report (loads its pictures from figures/)
     <output>/figures/               its pictures (thumbnail + full size per run)
     <output>/metrics.csv            volume, Dice, duration, status per run
 
