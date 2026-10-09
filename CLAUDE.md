@@ -150,6 +150,9 @@ Usage examples for clusters (building the `.sif` files from Docker Hub digests o
 
 ## Status and next session
 
+**Finding on the user's 22q dataset (2026-10-09).** HALFpipe's bad skull-strip reports came from recon-all, not from the skull-stripping tools: rerun with `run_reconall: false`, every participant's HALFpipe mask was fine (with both the SynthSeg and the ANTs variants). `--reconall` is therefore a diagnostic option, to show what FreeSurfer's refinement does to each tool's mask, not the normal path. A pilot with `--reconall synthseg,ants` (job 5123793, a few participants) was still running at that point.
+- Nested Apptainer works on Narval (pilot job 5106506, 21 participants). Measured per T1w: BET 12 s, SynthSeg 94 s (before `--robust`), SynthStrip 202 s, ANTs 469 s.
+
 **On Narval (2026-10-09).** The user built the four tools' `.sif` files in the user's scratch test folder from the pinned Docker Hub digests.
 - FSL's build was killed twice on the login node during the SIF compression; the sandbox-then-job route (see README) worked.
 - Next on the cluster: send `skullstrip-bench_<version>.tar`, convert it, generate the scripts with a 2-participant pilot (fast tools), and submit. This is the first real test of nested Apptainer.
