@@ -1,0 +1,23 @@
+# Not a skull-stripping tool: with --reconall synthseg,ants, it refines those
+# tools' masks the way HALFpipe does with run_reconall: true. The T1w stripped
+# by the tool (prepared as {output_prefix}_bids) goes through fMRIPrep from
+# HALFpipe's image, anatomy only, skull stripping skipped, recon-all on; the
+# mask is fMRIPrep's final desc-brain_mask. FreeSurfer's {license} is
+# license.txt in the containers folder. Templates are cached in the image.
+name: reconall
+image: halfpipe/halfpipe:1.3.1
+container: halfpipe-1.3.1
+refines_masks: true
+command: >-
+  fmriprep {output_prefix}_bids {output_prefix}_fmriprep participant
+  --participant-label 01 --anat-only --skull-strip-t1w skip
+  --output-spaces anat --no-submm-recon
+  --fs-license-file {license} --nprocs {threads} --omp-nthreads {threads}
+  -w {output_prefix}_work --skip-bids-validation --notrack --stop-on-first-crash
+mask_output: "{output_prefix}_fmriprep"
+postprocess: fmriprep_brain_mask
+# recon-all takes hours: stop a run after a day.
+timeout_min: 1440
+cpus: 8
+mem_gb: 16
+minutes: 480

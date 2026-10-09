@@ -13,7 +13,9 @@ STEM_full.jpg for the zoom viewer, the T1w with the mask's outline in red.
 
 `metrics.csv` has one row per run: subject, stem, tool, status, volume_ml,
 dice_consensus (against the majority vote of the tools that succeeded on that
-T1w, empty with fewer than two), n_tools_consensus, duration_s, error.
+T1w, empty with fewer than two), n_tools_consensus, duration_s, error. With
+`--reconall`, refined masks have their own rows (tool `synthseg+reconall`, for
+instance); they get a Dice but do not vote in the consensus.
 
 The logs are not here: they go to `logs/` in the working directory the
 command is run from (or `--workdir`), together with the sbatch script and

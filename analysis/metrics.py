@@ -2,7 +2,9 @@
 `run-metrics`: one row per run, with numbers that guide the eye — not a verdict.
 
 There is no ground truth, so each mask is compared with the consensus of all
-tools that succeeded on the same T1w (majority vote, voxel by voxel). Since
+tools that succeeded on the same T1w (majority vote, voxel by voxel). Masks
+refined by recon-all (`synthseg+reconall`) get a Dice too, but do not vote:
+they would count their base tool twice. Since
 the consensus only involves one T1w, a participant's metrics can be computed
 as soon as that participant is done: each one gets its own part (internal
 state), and `report/metrics.csv` is rebuilt from the parts.
@@ -66,7 +68,9 @@ def metrics_for_one_t1w(records):
     """Rows for every tool run on the same T1w."""
     masks = {record["tool"]: load_mask(record["mask"])
              for record in records if record["status"] == "ok"}
-    consensus = majority_vote(list(masks.values())) if len(masks) >= 2 else None
+    voters = [masks[record["tool"]] for record in records
+              if record["tool"] in masks and not record.get("refines")]
+    consensus = majority_vote(voters) if len(voters) >= 2 else None
 
     rows = []
     for record in records:
@@ -79,7 +83,7 @@ def metrics_for_one_t1w(records):
             "volume_ml": round(mask.sum() * voxel_ml, 1) if mask is not None else None,
             "dice_consensus": (round(dice(mask, consensus), 4)
                                if mask is not None and consensus is not None else None),
-            "n_tools_consensus": len(masks),
+            "n_tools_consensus": len(voters),
             "duration_s": record["duration_s"],
             "error": record["error"],
         })

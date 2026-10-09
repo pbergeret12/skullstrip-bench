@@ -20,7 +20,7 @@ def test_majority_vote_needs_more_than_half():
     assert majority_vote(masks).tolist() == [True, True, False]
 
 
-def write_run(runs_dir, tool, status, mask_data=None):
+def write_run(runs_dir, tool, status, mask_data=None, refines=None):
     mask_path = None
     if mask_data is not None:
         mask_path = runs_dir.parent / f"{tool}.nii.gz"
@@ -30,7 +30,7 @@ def write_run(runs_dir, tool, status, mask_data=None):
     (runs_dir / tool / "sub-01.json").write_text(json.dumps({
         "tool": tool, "stem": "sub-01", "subject": "01", "status": status,
         "duration_s": 1.0, "error": None if status == "ok" else "boom",
-        "mask": str(mask_path) if mask_path else None}))
+        "mask": str(mask_path) if mask_path else None, "refines": refines}))
 
 
 def test_compute_metrics_volume_dice_and_failed_run(tmp_path):
@@ -45,3 +45,17 @@ def test_compute_metrics_volume_dice_and_failed_run(tmp_path):
     assert table.loc["a", "n_tools_consensus"] == 2
     assert np.isnan(table.loc["c", "volume_ml"])
     assert table.loc["c", "error"] == "boom"
+
+
+def test_refined_masks_get_a_dice_but_do_not_vote(tmp_path):
+    runs_dir = tmp_path / "runs"
+    full, empty = np.ones((10, 10, 10)), np.zeros((10, 10, 10))
+    write_run(runs_dir, "a", "ok", full)
+    write_run(runs_dir, "b", "ok", full)
+    # Two refined copies of an empty mask would outvote a and b if they voted.
+    write_run(runs_dir, "a+reconall", "ok", empty, refines="a")
+    write_run(runs_dir, "b+reconall", "ok", empty, refines="b")
+    table = compute_metrics(runs_dir).set_index("tool")
+    assert table.loc["a", "dice_consensus"] == 1.0
+    assert table.loc["a+reconall", "dice_consensus"] == 0.0
+    assert table.loc["a+reconall", "n_tools_consensus"] == 2

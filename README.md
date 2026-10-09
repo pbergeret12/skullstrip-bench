@@ -17,7 +17,7 @@ uv sync
 uv run invoke run --bids /path/to/bids --containers /path/to/images --output /path/to/results
 ```
 
-You bring only your dataset and the container images; anything else a supported tool needs (such as the ANTs template) ships with Skullstrip Bench. The folders are read in place, nothing is copied or linked:
+You bring only your dataset and the container images; anything else a supported tool needs (such as the ANTs template) ships with Skullstrip Bench. The one exception is the optional `--reconall` comparison, which also needs your FreeSurfer license (see [Recon-all, as in HALFpipe](#recon-all-as-in-halfpipe)). The folders are read in place, nothing is copied or linked:
 
 | Flag | What it points to |
 | ---- | ----------------- |
@@ -25,6 +25,7 @@ You bring only your dataset and the container images; anything else a supported 
 | `--containers` | A folder holding only container images: Docker archives `<name>.tar` (from `docker save`) and/or Apptainer `<name>.sif`, named as in [Compatible containers](#compatible-containers). |
 | `--output` | Where the report goes (default `output_data/` in this repository). Use one output folder per dataset. |
 | `--workdir` | Where the logs go, and with `--scheduler slurm` the sbatch script and `jobs.txt` (default: the directory you run the command from). |
+| `--reconall` | Optional. Tools whose masks also go through recon-all the way HALFpipe does, each shown as an extra column (see [Recon-all, as in HALFpipe](#recon-all-as-in-halfpipe)). |
 
 To avoid retyping the paths on one machine, set defaults under `inputs:` in `invoke.yaml`.
 
@@ -186,6 +187,14 @@ Building the FSL image (about 5 GB) on a cluster login node can be killed by the
 
 Under Docker on a Mac, SynthSeg needs at least 12 GB for the Docker virtual machine (it crashed with 8 GB), and long runs need free disk space: a full disk crashed Docker during development. The runtimes above were measured under amd64 emulation on an Apple Silicon Mac and are faster natively.
 
+### Recon-all, as in HALFpipe
+
+Skullstrip Bench exists first to choose the skull stripping fed to the HALFpipe preprocessing pipeline. With `run_reconall: true`, HALFpipe's fMRIPrep does not keep that mask: after FreeSurfer's recon-all, it rebuilds the brain mask from FreeSurfer's segmentation. Where FreeSurfer goes wrong, the final mask goes wrong too, whichever tool stripped the brain.
+
+`--reconall synthseg,ants` shows that final mask next to each named tool's own, as an extra column (`synthseg+reconall`, `ants+reconall`). For every T1w, the T1w stripped with the tool's mask goes through fMRIPrep from HALFpipe's own image, anatomy only, with skull stripping skipped and recon-all on, as a pre-stripped T1w does in HALFpipe. The mask shown is fMRIPrep's final `desc-brain_mask`, put back on the T1w grid. These columns get a Dice against the consensus but do not vote in it, since they would count their tool twice.
+
+This needs two more files in `--containers`: HALFpipe's image as `halfpipe-1.3.1.sif` (or `.tar`), which already holds fMRIPrep, FreeSurfer and the templates, and your FreeSurfer license as `license.txt` (free from the FreeSurfer website; it is personal, so it cannot ship with this public project). Recon-all takes several hours per T1w and per tool, so the sbatch walltime grows accordingly (8 CPUs, 16 GB). Cleaning a tool with `clean-skullstrip --tools synthseg` also cleans `synthseg+reconall`, which was made from its masks.
+
 ### Adding a tool
 
 A tool is one YAML in `tools/` and its image in the containers folder. If it needs other files (an atlas, a template, a config), they go in `container_requirements/<tool>/` in this repository, so that they ship with the project and its container; users never have to provide them.
@@ -211,8 +220,8 @@ Inside the container, `{input}` is the T1w, `{mask}` where to write the mask, `{
 
 | Task               | Description |
 | ------------------ | ----------- |
-| `run`              | The whole pipeline: the check, then participant by participant the runs and the update of metrics and report. With `--scheduler slurm` (running on an HPC) it writes `skullstrip_bench_sbatch.sh` and `jobs.txt` in the working directory instead; `--force` cleans first. |
-| `run-check`        | Checks the dataset (shallow), tools, images, engine and output without running anything, and writes the plan and the input record (hidden state). Always re-runs. |
+| `run`              | The whole pipeline: the check, then participant by participant the runs and the update of metrics and report. With `--scheduler slurm` (running on an HPC) it writes `skullstrip_bench_sbatch.sh` and `jobs.txt` in the working directory instead; `--reconall` adds the recon-all columns; `--force` cleans first. |
+| `run-check`        | Checks the dataset (shallow), tools, images, engine and output without running anything, and writes the plan and the input record (hidden state); `--reconall` as for `run`. Always re-runs. |
 | `run-skullstrip`   | Executes the plan, one container run per (T1w × tool); `--subjects`, `--tools`, `--retry-failed`, `--threads`, `--work-root`. |
 | `run-metrics`      | Updates `metrics.csv` (volume, Dice against the consensus, duration and status of each run) for `--subjects` (default all), from per-participant parts. Always re-runs. |
 | `run-report`       | Updates the report for `--subjects` (default all): draws their missing pictures, rewrites their rows and rebuilds `report.html` from per-participant parts. |
@@ -224,7 +233,7 @@ Inside the container, `{input}` is the T1w, `{mask}` where to write the mask, `{
 | `verify`           | Checks that code, configuration, data and documentation still agree. |
 | `clean`            | Removes all computed outputs of an output folder, and the logs and Slurm files of a working directory. |
 | `clean-check`      | Removes the plan and the input record. |
-| `clean-skullstrip` | Removes the runs' logs, masks and records and their report pictures; `--tools` limits it to some tools. |
+| `clean-skullstrip` | Removes the runs' logs, masks and records and their report pictures; `--tools` limits it to some tools (and their `+reconall` columns). |
 | `clean-metrics`    | Removes `metrics.csv` and its parts. |
 | `clean-report`     | Removes the report, its parts and its pictures. |
 | `clean-slurm`      | Removes `skullstrip_bench_sbatch.sh`, `jobs.txt` and the jobs' own logs from the working directory. |

@@ -13,15 +13,15 @@ ANTS = {"name": "ants", "requires": ["template.nii.gz"],
 
 
 def test_placeholders_match_between_container_and_host():
-    inside = placeholders(RUN, 4, None, TOOL, "container")
-    outside = placeholders(RUN, 4, None, TOOL, "host")
+    inside = placeholders(RUN, 4, {}, TOOL, "container")
+    outside = placeholders(RUN, 4, {}, TOOL, "host")
     assert TOOL["mask_output"].format(**inside) == "/output/out_mask.nii.gz"
     assert TOOL["mask_output"].format(**outside) == "out/work/fsl-bet/sub-01/out_mask.nii.gz"
     assert inside["input"] == "/input/sub-01_T1w.nii.gz"
 
 
 def test_mounts_share_input_read_only_and_skip_missing_tool_dir():
-    shared = [(str(host), inside, read_only) for host, inside, read_only in mounts(RUN, TOOL, None)]
+    shared = [(str(host), inside, read_only) for host, inside, read_only in mounts(RUN, TOOL, {})]
     assert shared == [("bids/sub-01/anat", "/input", True),
                       ("out/work/fsl-bet/sub-01", "/output", False)]
 
@@ -64,9 +64,9 @@ def test_failure_status():
 
 
 def test_requirements_are_mounted_read_only_per_tool():
-    shared = mounts(RUN, ANTS, "/data/requirements")
+    shared = mounts(RUN, ANTS, {"requirements_dir": "/data/requirements"})
     assert (Path("/data/requirements/ants"), "/requirements", True) in shared
-    inside = placeholders(RUN, 8, "/data/requirements", ANTS, "container")
+    inside = placeholders(RUN, 8, {"requirements_dir": "/data/requirements"}, ANTS, "container")
     assert ANTS["command"].format(**inside).endswith("-e /requirements/template.nii.gz")
 
 

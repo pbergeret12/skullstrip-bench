@@ -19,6 +19,7 @@ from pathlib import Path
 from analysis.bids_inputs import derivative_mask_path, find_t1w, list_subjects
 from analysis.launcher import detect_engine, image_status, list_image_files
 from analysis.layout import logs_path, state_path
+from analysis.reconall import check_reconall
 from analysis.tool_configs import load_tools, missing_requirements
 
 MAX_NAMES_SHOWN = 10
@@ -32,20 +33,29 @@ def fail(message):
     print(f"  ✘ {message}")
 
 
-def run_check(paths, engine=None, scheduler="local", subjects=None, tools=None, smoke=False):
+def run_check(paths, engine=None, scheduler="local", subjects=None, tools=None, smoke=False,
+              reconall=None):
     """
     Run every check, print a summary, write and return the plan.
 
     `paths` holds `bids_dir` and `containers_dir` (the user's), `tools_dir`
     and `requirements_dir` (this project's), `output_dir` (the report) and
-    `workdir` (logs, and the sbatch script in cluster mode).
+    `workdir` (logs, and the sbatch script in cluster mode). `reconall` names
+    the tools whose masks are also refined by FreeSurfer (analysis/reconall.py).
     """
     t1w_images = check_dataset(paths["bids_dir"], subjects, smoke)
     engine = check_engine(engine, scheduler)
-    usable_tools = check_tools(paths, engine, tools, require_sif=scheduler == "slurm")
+    configs = load_configs(paths["tools_dir"])
+    usable_tools = check_tools(paths, engine, tools, configs, scheduler == "slurm")
+    if reconall:
+        refiner = next((tool for tool in configs.values() if tool.get("refines_masks")), None)
+        usable_tools |= check_reconall(reconall, refiner, usable_tools, engine,
+                                       paths["containers_dir"], scheduler == "slurm",
+                                       lambda good, message: (ok if good else fail)(message))
     writable = check_output(paths["output_dir"])
 
-    runs = [make_run(tool_name, t1w, paths["output_dir"], paths["workdir"])
+    # A refining run comes after its base tool's run on the same T1w.
+    runs = [make_run(tool_name, t1w, paths["output_dir"], paths["workdir"], usable_tools)
             for t1w in t1w_images for tool_name in usable_tools]
     plan = {
         "ready": bool(runs) and engine is not None and writable,
@@ -127,31 +137,44 @@ def check_engine(forced=None, scheduler="local"):
     return engine
 
 
-def check_tools(paths, engine, wanted=None, require_sif=False):
+def load_configs(tools_dir):
+    """Every valid tool config by name; invalid ones are reported."""
+    print(f"\nTools  {tools_dir}")
+    configs, problems = load_tools(tools_dir)
+    for name, problem in problems.items():
+        fail(f"{name}: config {problem}")
+    return configs
+
+
+def check_tools(paths, engine, wanted=None, configs=None, require_sif=False):
     """
     Print the tool checks, return the configs of the usable tools by name.
 
     Without `wanted`, every image in the containers folder that has a config
-    in `tools/` is used; other images are reported as not compatible.
+    in `tools/` is used; other images are reported as not compatible. A
+    config that refines other tools' masks (reconall) is not a tool of its
+    own: it only runs through --reconall.
     """
-    tools_dir, containers_dir = paths["tools_dir"], paths["containers_dir"]
-    print(f"\nTools  {tools_dir}  (images in {containers_dir})")
-    configs, problems = load_tools(tools_dir)
-    for name, problem in problems.items():
-        fail(f"{name}: config {problem}")
-
+    configs = load_configs(paths["tools_dir"]) if configs is None else configs
+    containers_dir = paths["containers_dir"]
+    print(f"  images in {containers_dir}")
+    refiners = {name for name, tool in configs.items() if tool.get("refines_masks")}
     by_image = {tool["container"]: name for name, tool in configs.items()}
     if wanted:
-        candidates = [name for name in wanted if name in configs]
+        candidates = [name for name in wanted if name in configs and name not in refiners]
         for name in sorted(set(wanted) - set(configs)):
-            fail(f"{name}: unknown tool (no {name}.yaml in {tools_dir})")
+            fail(f"{name}: unknown tool (no {name}.yaml in {paths['tools_dir']})")
+        for name in sorted(set(wanted) & refiners):
+            fail(f"{name}: refines other tools' masks, use --reconall instead of --tools")
     else:
         candidates = []
         for image in list_image_files(containers_dir):
+            if by_image.get(image) in refiners:
+                continue   # used only through --reconall
             if image in by_image:
                 candidates.append(by_image[image])
             else:
-                fail(f"{image}: not compatible (no config in {tools_dir}), skipped")
+                fail(f"{image}: not compatible (no config in {paths['tools_dir']}), skipped")
 
     usable = {}
     for name in sorted(candidates):
@@ -188,14 +211,19 @@ def check_output(output_dir):
     return False
 
 
-def make_run(tool_name, t1w, output_dir, workdir):
+def make_run(tool_name, t1w, output_dir, workdir, tools=None):
     """
     One (T1w × tool) run, with every path it reads or writes: its logs go to
     the working directory, its mask, record and scratch folder are internal
-    state of the output folder.
+    state of the output folder. A refining run also gets the base tool's mask.
     """
     stem = t1w["stem"]
+    base = (tools or {}).get(tool_name, {}).get("refines")
+    refining = {"refines": base,
+                "base_mask": str(derivative_mask_path(state_path(output_dir, "masks"), base, t1w))
+                } if base else {}
     return {
+        **refining,
         "tool": tool_name,
         "subject": t1w["entities"]["sub"],
         "stem": stem,

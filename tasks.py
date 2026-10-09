@@ -27,6 +27,9 @@ SELECTION_HELP = {
              "(default: every compatible image in --containers).",
     "subjects": "Comma-separated subjects, e.g. 10159,sub-10171 (default: all).",
 }
+RECONALL_HELP = ("Comma-separated tools whose masks also go through recon-all the HALFpipe way, "
+                 "e.g. synthseg,ants: an extra column each (e.g. synthseg+reconall). Needs "
+                 "HALFpipe's image and FreeSurfer's license.txt in --containers.")
 SCHEDULERS = ("local", "slurm")
 PROJECT_DIR = Path(__file__).resolve().parent   # also inside the tool's container
 
@@ -112,9 +115,10 @@ def record_inputs(c, plan):
 @task(help={**PATH_HELP, **SELECTION_HELP,
             "engine": "Force a container engine: docker or apptainer (default: auto).",
             "scheduler": "local (run here) or slurm (cluster jobs: Apptainer, .sif required).",
+            "reconall": RECONALL_HELP,
             "smoke": "Keep only the first T1w (used by run-smoke)."})
 def run_check(c, bids=None, containers=None, output=None, workdir=None, tools=None,
-              subjects=None, engine=None, scheduler="local", smoke=False):
+              subjects=None, engine=None, scheduler="local", reconall=None, smoke=False):
     """
     Check dataset, tools, images, requirements, engine and output — run nothing.
 
@@ -133,7 +137,8 @@ def run_check(c, bids=None, containers=None, output=None, workdir=None, tools=No
         raise Exit(f"❌ Unknown --scheduler '{scheduler}' (choose from {', '.join(SCHEDULERS)}).")
     plan = check_everything(input_paths(c, bids, containers, output, workdir),
                             engine=engine, scheduler=scheduler, subjects=split_list(subjects),
-                            tools=split_list(tools), smoke=smoke)
+                            tools=split_list(tools), smoke=smoke,
+                            reconall=split_list(reconall))
     if not plan["ready"]:
         raise Exit("❌ Nothing can run: fix the ✘ above, then `invoke run-check` again.")
     record_inputs(c, plan)
@@ -285,17 +290,20 @@ def run_aggregate(c, output=None):
 @task(help={**PATH_HELP, **SELECTION_HELP,
             "engine": "Force a container engine: docker or apptainer (default: auto).",
             "scheduler": "local: run everything here (default). slurm: run nothing, "
-                         "write job scripts in <output>/slurm/ instead.",
+                         "write skullstrip_bench_sbatch.sh and jobs.txt in the working "
+                         "directory instead.",
+            "reconall": RECONALL_HELP,
             "force": "Delete every computed output first, then run from scratch."})
 def run(c, bids=None, containers=None, output=None, workdir=None, tools=None,
-        subjects=None, engine=None, scheduler="local", force=False):
+        subjects=None, engine=None, scheduler="local", reconall=None, force=False):
     """
     Full pipeline: check, then participant by participant: skullstrip runs,
     metrics, report update (the report grows as participants finish).
 
-    With --scheduler slurm, only the check runs here; the rest becomes a
-    Slurm job array (one task per participant) plus a report job, written to
-    <output>/slurm/ for you to edit (--account, --array) and submit.
+    With --scheduler slurm, only the check runs here; the rest becomes one
+    Slurm job array (one task per participant, each adding itself to the
+    report), written to skullstrip_bench_sbatch.sh in the working directory
+    for you to edit (--account, --array) and submit.
 
     Steps are called directly rather than through `pre=`, so that flags reach
     them. Every step caches by checking whether its output already exists, so
@@ -306,8 +314,8 @@ def run(c, bids=None, containers=None, output=None, workdir=None, tools=None,
         print("💥 --force: removing every computed output before running")
         clean(c, output=output, workdir=workdir)
     plan = run_check(c, bids=bids, containers=containers, output=output, workdir=workdir,
-                     tools=tools,
-                     subjects=subjects, engine=engine, scheduler=scheduler)
+                     tools=tools, subjects=subjects, engine=engine, scheduler=scheduler,
+                     reconall=reconall)
     if scheduler == "slurm":
         write_slurm(plan)
         return
@@ -428,7 +436,9 @@ def clean_skullstrip(c, output=None, workdir=None, tools=None):
     report, which summarize these runs.
 
     With --tools, only those tools' files go, so their runs (failed ones
-    included) are redone on the next `invoke run`.
+    included) are redone on the next `invoke run`. Cleaning a tool also
+    cleans its recon-all refinement (e.g. synthseg+reconall), which was made
+    from its masks.
     """
     from analysis.layout import logs_path, report_path
 
@@ -440,6 +450,7 @@ def clean_skullstrip(c, output=None, workdir=None, tools=None):
         for tool in split_list(tools):
             for folder in per_tool:
                 remove(folder / tool)
+                remove(folder / f"{tool}+reconall")
     else:
         for tool_logs in sorted(path for path in logs_dir.glob("*") if path.is_dir()):
             remove(tool_logs)   # the tools' logs; the jobs' own slurm_* logs stay

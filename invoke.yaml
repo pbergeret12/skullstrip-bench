@@ -51,7 +51,7 @@ verify:
     - "*:*"                 # Docker image references (name:tag)
     - "ants/*"              # tool requirement files, named relative to their folder
     - "MICCAI2012-Multi-Atlas-Challenge-Data"   # folder inside ANTs' Oasis.zip
-    - "jobs.txt"            # written only by --scheduler slurm, under <output>/slurm/
+    - "jobs.txt"            # written only by --scheduler slurm, in the working directory
     - "slurm"
     - "<workdir>"           # placeholders for the user's working directory
     - "<output>"            # ... and output folder
@@ -61,6 +61,7 @@ verify:
     - "logs/*"
     - ".skullstrip-bench/*"
     - "dataset_description.json"   # lives in the user's BIDS dataset
+    - "license.txt"         # the user's FreeSurfer license, in --containers (never here)
     - "ants"                # a requirements subfolder, named on its own
     # Deliberately tracked despite size and type: the tools' bundled
     # requirements (ANTs' OASIS template, 32 MB, CC BY 4.0, see its SOURCE.md),

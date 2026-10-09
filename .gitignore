@@ -203,3 +203,7 @@ cython_debug/
 logs/
 jobs.txt
 skullstrip_bench_sbatch.sh
+
+# Guard: a FreeSurfer license is personal and must never be committed
+# (--reconall reads it from the containers folder).
+license.txt
