@@ -202,4 +202,4 @@ cython_debug/
 # Written in the working directory by skullstrip-bench runs (see analysis/layout.py)
 logs/
 jobs.txt
-*.sbatch
+skullstrip_bench_sbatch.sh

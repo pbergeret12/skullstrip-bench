@@ -156,14 +156,14 @@ This writes two files in the working directory, and the jobs will write their lo
 
 | File | Content |
 | ---- | ------- |
-| `skullstrip_bench.sbatch` | The job array, the only thing to submit. One task is one participant: every selected tool on all of that participant's T1w images, working on the node's local disk (`$SLURM_TMPDIR`) with the threads Slurm granted, after which the participant is added to the report and the metrics in `results/`. |
+| `skullstrip_bench_sbatch.sh` | The job array, the only thing to submit. One task is one participant: every selected tool on all of that participant's T1w images, working on the node's local disk (`$SLURM_TMPDIR`) with the threads Slurm granted, after which the participant is added to the report and the metrics in `results/`. |
 | `jobs.txt` | One participant per line (`sub-XX`). Array task N processes line N. |
 | `logs/` | The jobs' own `slurm_<job>_<task>.log` and `.err`, and each tool's `.log` and `.err`. |
 
-Open `skullstrip_bench.sbatch` and replace `def-CHANGEME` with your allocation (for example `def-yourpi`). The array line, `#SBATCH --array=1-N`, runs every participant of `jobs.txt`; change it to `1-20` for a pilot on the first 20, or `1-N%50` to run at most 50 at once. Then submit it:
+Open `skullstrip_bench_sbatch.sh` and replace `def-CHANGEME` with your allocation (for example `def-yourpi`). The array line, `#SBATCH --array=1-N`, runs every participant of `jobs.txt`; change it to `1-20` for a pilot on the first 20, or `1-N%50` to run at most 50 at once. Then submit it:
 
 ```bash
-sbatch skullstrip_bench.sbatch
+sbatch skullstrip_bench_sbatch.sh
 ```
 
 There is no separate report job: each task adds its participant to `results/report.html` as soon as it is done, so the report can be opened at any time. The resources of one task are filled in from the selected tools: the largest CPU and memory needs, since the tools run one after the other, and a walltime of the sum of their durations × 1.5 + 10 min. Durations come from each tool's YAML, or from durations already measured with Apptainer in that output folder, so after a pilot, generating the script again gives walltimes that fit the cluster. `seff <jobid>` shows the real memory peak.
@@ -212,7 +212,7 @@ Inside the container, `{input}` is the T1w, `{mask}` where to write the mask, `{
 
 | Task               | Description |
 | ------------------ | ----------- |
-| `run`              | The whole pipeline: the check, then participant by participant the runs and the update of metrics and report. With `--scheduler slurm` (running on an HPC) it writes `skullstrip_bench.sbatch` and `jobs.txt` in the working directory instead; `--force` cleans first. |
+| `run`              | The whole pipeline: the check, then participant by participant the runs and the update of metrics and report. With `--scheduler slurm` (running on an HPC) it writes `skullstrip_bench_sbatch.sh` and `jobs.txt` in the working directory instead; `--force` cleans first. |
 | `run-check`        | Checks the dataset (shallow), tools, images, engine and output without running anything, and writes the plan and the input record (hidden state). Always re-runs. |
 | `run-skullstrip`   | Executes the plan, one container run per (T1w × tool); `--subjects`, `--tools`, `--retry-failed`, `--threads`, `--work-root`. |
 | `run-metrics`      | Updates `metrics.csv` (volume, Dice against the consensus, duration and status of each run) for `--subjects` (default all), from per-participant parts. Always re-runs. |
@@ -228,7 +228,7 @@ Inside the container, `{input}` is the T1w, `{mask}` where to write the mask, `{
 | `clean-skullstrip` | Removes the runs' logs, masks and records and their report pictures; `--tools` limits it to some tools. |
 | `clean-metrics`    | Removes `metrics.csv` and its parts. |
 | `clean-report`     | Removes the report, its parts and its pictures. |
-| `clean-slurm`      | Removes `skullstrip_bench.sbatch`, `jobs.txt` and the jobs' own logs from the working directory. |
+| `clean-slurm`      | Removes `skullstrip_bench_sbatch.sh`, `jobs.txt` and the jobs' own logs from the working directory. |
 
 Every task that reads or writes results takes `--output` (default `output_data/`), and those that write logs or Slurm files take `--workdir` (default the current directory). `uv run invoke --list` and `uv run invoke --help <task>` give the details. The checks used during development are `uv run invoke run-smoke --bids … --containers …`, `uv run invoke verify`, `uv run pytest` and `uv run flake8`.
 
@@ -249,4 +249,4 @@ Every task that reads or writes results takes `--output` (default `output_data/`
 
 ## Data
 
-The report, the metrics, the logs and the hidden masks show or describe participants' brains, so they stay out of git: everything under the output folder except the two provenance records in `output_data/.skullstrip-bench/`, and the `logs/`, `jobs.txt` and `.sbatch` files a run writes in its working directory. Keep it that way when running on restricted datasets.
+The report, the metrics, the logs and the hidden masks show or describe participants' brains, so they stay out of git: everything under the output folder except the two provenance records in `output_data/.skullstrip-bench/`, and the `logs/`, `jobs.txt` and sbatch script a run writes in its working directory. Keep it that way when running on restricted datasets.

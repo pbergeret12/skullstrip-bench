@@ -98,9 +98,9 @@ def test_one_sbatch_and_jobs_txt_in_the_workdir(tmp_path):
     sbatch_file, _ = write_slurm_files(slurm_plan(tmp_path), tmp_path, "/env/bin/invoke",
                                        "invoke run --scheduler slurm")
     workdir = tmp_path / "work"
-    assert sbatch_file == workdir / "skullstrip_bench.sbatch"
+    assert sbatch_file == workdir / "skullstrip_bench_sbatch.sh"
     assert sorted(path.name for path in workdir.iterdir()) == [
-        "jobs.txt", "logs", "skullstrip_bench.sbatch"]
+        "jobs.txt", "logs", "skullstrip_bench_sbatch.sh"]
     assert (workdir / "jobs.txt").read_text() == "sub-01\nsub-02\n"
     sbatch = sbatch_file.read_text()
     assert "#SBATCH --account=def-CHANGEME" in sbatch

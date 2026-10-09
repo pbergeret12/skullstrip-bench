@@ -4,13 +4,13 @@
 Nothing is submitted. In the working directory (where the command is run,
 or --workdir) this writes:
 - `jobs.txt`: one participant per line (`sub-XX`);
-- `skullstrip_bench.sbatch`: the job array, one task per participant (task N
+- `skullstrip_bench_sbatch.sh`: the job array, one task per participant (task N
   takes line N of jobs.txt), running every selected tool on all of that
   participant's T1w images, then adding the participant to the report;
 and the jobs write their `.log` and `.err` to the working directory's `logs/`.
 
 There is no separate report job: the report is incremental, every task
-updates it, so `sbatch skullstrip_bench.sbatch` is the only command. The user
+updates it, so `sbatch skullstrip_bench_sbatch.sh` is the only command. The user
 edits `--account` (left as def-CHANGEME) and, to run fewer than all
 participants, `--array` (every line of jobs.txt by default). Resources come
 from the tools' YAML (`cpus`, `mem_gb`, `minutes`), or from durations already
@@ -31,7 +31,7 @@ from pathlib import Path
 from analysis.layout import state_path
 
 ACCOUNT_PLACEHOLDER = "def-CHANGEME"
-SBATCH_FILE = "skullstrip_bench.sbatch"
+SBATCH_FILE = "skullstrip_bench_sbatch.sh"
 JOBS_FILE = "jobs.txt"
 TIME_MARGIN = 1.5                   # walltime = estimate × margin + overhead
 OVERHEAD_MINUTES = 10               # image start-up, report pictures, copies

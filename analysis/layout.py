@@ -10,7 +10,7 @@ sees stays exactly this:
     <workdir>/logs/<tool>/<stem>.log   what the container printed (command first)
     <workdir>/logs/<tool>/<stem>.err   its errors, and why the run failed if it did
     <workdir>/logs/slurm_*.log|.err    the cluster jobs' own logs
-    <workdir>/skullstrip_bench.sbatch  with --scheduler slurm: the job to submit
+    <workdir>/skullstrip_bench_sbatch.sh  with --scheduler slurm: the job to submit
     <workdir>/jobs.txt                 with --scheduler slurm: one participant per line
 
 `<output>` is --output; `<workdir>` is the working directory the command is
