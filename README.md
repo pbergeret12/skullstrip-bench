@@ -65,13 +65,13 @@ Nested Apptainer requires unprivileged user namespaces on the compute nodes, whi
 
 ### Preparing the images
 
-Build the tool's image on a machine with Docker and internet access, from this repository. This gives `skullstrip-bench_<version>.tar` (about 300 MB), where the version is the git commit. The build takes a few minutes and downloads everything over https, because some institutional networks stall plain-http Ubuntu mirrors.
+The tool itself is one file, `skullstrip-bench_<version>.sif`, published with each [release](https://github.com/pbergeret12/skullstrip-bench/releases). Download it once on a login node, which has internet access, and store it wherever you keep your images (outside the folder you pass as `--containers`):
 
 ```bash
-uv run invoke build-image --output-dir /path/to/folder
+wget https://github.com/pbergeret12/skullstrip-bench/releases/download/<version>/skullstrip-bench_<version>.sif
 ```
 
-Copy that archive to the cluster. The skull-stripping images themselves do not need to travel through your own connection: build them directly on a login node, which has internet access, from Docker Hub. The digests pin the exact images this project was tested with, and the file names are how the tool recognizes each image. Run this inside `tmux`, so that it survives a dropped SSH connection.
+The skull-stripping images are built directly on the login node from Docker Hub. The digests pin the exact images this project was tested with, and the file names are how the tool recognizes each image. Run this inside `tmux`, so that it survives a dropped SSH connection.
 
 ```bash
 module load apptainer
@@ -80,14 +80,23 @@ export APPTAINER_TMPDIR=$SCRATCH/apptainer_tmp APPTAINER_CACHEDIR=$SCRATCH/appta
 mkdir -p $APPTAINER_TMPDIR $APPTAINER_CACHEDIR $SCRATCH/containers
 cd $SCRATCH/containers
 
-apptainer build skullstrip-bench.sif docker-archive://$SCRATCH/skullstrip-bench_<version>.tar
 apptainer build synthstrip_1.8.sif     docker://freesurfer/synthstrip@sha256:ebbc177221194371f16362513ace68312a22922bb581bdfa618ac7ff9c1d2c06
 apptainer build fsl_6.0.7.22.sif       docker://gamorosino/fsl@sha256:e17b13fe4af7ec79643595bb2de16584193234b99cb2fafbd7c786a1dc8b8d43
 apptainer build synthseg_conda-0.2.sif docker://cookpa/synthseg@sha256:4c632dd3c7591e72b4b87357449e50cc96cc29cef92326db879264be107dd4c9
 apptainer build ants_latest.sif        docker://antsx/ants@sha256:59c45f54a1f1dc69134f63bec91a726e41c71c64a16cc21cda0b54526910a3c3
 ```
 
-Keep `skullstrip-bench.sif` out of the folder you will pass as `--containers` (move it one level up, for instance). If Docker Hub answers "toomanyrequests" (login nodes share one address), retry later or log in with `apptainer remote login --username <you> docker://docker.io`. Images you already have as `.tar` archives convert the same way, with `docker-archive://path/to/<name>.tar`.
+If Docker Hub answers "toomanyrequests" (login nodes share one address), retry later or log in with `apptainer remote login --username <you> docker://docker.io`. Images you already have as `.tar` archives convert the same way, with `docker-archive://path/to/<name>.tar`.
+
+### Publishing a new version of the tool
+
+For maintainers. Publishing a GitHub release builds the tool's `.sif` on GitHub's servers and attaches it to the release (`.github/workflows/release-sif.yml`); nothing has to be built or uploaded from your own machine:
+
+```bash
+gh release create v0.2.0 --target <branch or commit> --title "v0.2.0" --notes "What changed"
+```
+
+The release tag becomes the tool's version, recorded in every plan the tool writes. To work on the image locally instead, `uv run invoke build-image --output-dir /path/to/folder` builds it with Docker and saves it as `skullstrip-bench_<commit>.tar`, which `apptainer build skullstrip-bench.sif docker-archive://…` converts. The build downloads everything over https, because some institutional networks stall plain-http Ubuntu mirrors.
 
 ### Testing on a compute node
 
@@ -202,7 +211,7 @@ Inside the container, `{input}` is the T1w, `{mask}` where to write the mask, `{
 | `run-update`       | `run-metrics` then `run-report` for some participants, which is what each participant's job runs when it is done. |
 | `run-aggregate`    | Rebuilds metrics and report for every participant, then the provenance record. It is the cluster report job. |
 | `run-smoke`        | A fast end-to-end pass: one T1w with SynthStrip, run locally. |
-| `build-image`      | Builds the tool's own container (`docker build` and `docker save` into `skullstrip-bench_<version>.tar`) on a machine with internet. |
+| `build-image`      | Builds the tool's own container locally (`docker build` and `docker save` into `skullstrip-bench_<version>.tar`). Releases are built by GitHub instead. |
 | `prepare-images`   | Builds each tool's Apptainer `.sif` from its `.tar`, from a Python checkout. |
 | `verify`           | Checks that code, configuration, data and documentation still agree. |
 | `clean`            | Removes all computed outputs of an output folder. |
@@ -222,6 +231,7 @@ Every task that reads or writes results takes `--output` (default `output_data/`
 | `tools/`       | One YAML per skull-stripping tool, and nothing else |
 | `tests/`       | pytest unit tests |
 | `Dockerfile`, `container/` | The tool's own container (Python environment, code, Apptainer) and its entry point |
+| `.github/workflows/` | Builds the tool's `.sif` and attaches it to each GitHub release |
 | `source_data/` | Empty on purpose, since inputs are read in place; see [`source_data/CONTENT.md`](source_data/CONTENT.md) |
 | `output_data/` | The default `--output`; see [`output_data/CONTENT.md`](output_data/CONTENT.md) |
 | `tasks.py`     | The invoke tasks |
