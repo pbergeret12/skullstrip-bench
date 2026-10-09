@@ -1,69 +1,62 @@
 """
-`run --scheduler slurm`: write ready-to-edit Slurm scripts instead of running.
+`run --scheduler slurm`: write one sbatch script instead of running.
 
-Nothing is submitted. In `<output>/slurm/` this writes:
-- `jobs.txt` — one participant per line (`sub-XX`); array task N handles line N;
-- `skullstrip_array.sh` — the job array: one task = one participant, every
-  selected tool run on all of that participant's T1w images, then that
-  participant is added to the metrics and the report (incremental);
-- `skullstrip_report.sh` — a final rebuild of metrics and report, plus the
-  provenance record, once the array has ended;
-- `submit.sh` — submits both, chaining the report after the array.
+Nothing is submitted. In the working directory (where the command is run,
+or --workdir) this writes:
+- `jobs.txt`: one participant per line (`sub-XX`);
+- `skullstrip_bench.sbatch`: the job array, one task per participant (task N
+  takes line N of jobs.txt), running every selected tool on all of that
+  participant's T1w images, then adding the participant to the report;
+and the jobs write their `.log` and `.err` to the working directory's `logs/`.
 
-The user then edits the sbatch scripts: `--account` (their allocation, left
-as def-CHANGEME) and, if they want fewer than all participants, `--array`
-(every line of jobs.txt by default). Resources
-come from the tools' YAML (`cpus`, `mem_gb`, `minutes`), or from durations
-already measured with Apptainer.
+There is no separate report job: the report is incremental, every task
+updates it, so `sbatch skullstrip_bench.sbatch` is the only command. The user
+edits `--account` (left as def-CHANGEME) and, to run fewer than all
+participants, `--array` (every line of jobs.txt by default). Resources come
+from the tools' YAML (`cpus`, `mem_gb`, `minutes`), or from durations already
+measured with Apptainer.
 
-When the tool itself runs from its container (skullstrip-bench.sif), the jobs
-call that same image through `apptainer exec`, with every input and output
-folder bound at the same path inside, so the plan's paths stay valid.
+When the tool itself runs from its container (skullstrip-bench.sif), the job
+calls that same image through `apptainer exec`, with every folder it reads or
+writes bound at the same path inside, so the plan's paths stay valid.
 """
 import json
 import math
 import os
 import shlex
 from collections import Counter
-
-from analysis.layout import logs_path, slurm_path, state_path
 from datetime import date
 from pathlib import Path
 
+from analysis.layout import state_path
+
 ACCOUNT_PLACEHOLDER = "def-CHANGEME"
+SBATCH_FILE = "skullstrip_bench.sbatch"
+JOBS_FILE = "jobs.txt"
 TIME_MARGIN = 1.5                   # walltime = estimate × margin + overhead
 OVERHEAD_MINUTES = 10               # image start-up, report pictures, copies
 TIME_STEP_MINUTES = 15              # walltimes are rounded up to this
-REPORT_MINUTES_PER_RUN = 0.05       # embedding pictures and metrics, per run
-REPORT_BASE_MINUTES = 30
 
 
 def write_slurm_files(plan, repo_dir, invoke_bin, command_line):
-    """Write the Slurm files for `plan`, return the folder they are in."""
-    output_dir = Path(plan["output_dir"]).resolve()
-    slurm_dir = slurm_path(output_dir)
-    slurm_dir.mkdir(parents=True, exist_ok=True)
-    logs_path(output_dir, "slurm").mkdir(parents=True, exist_ok=True)
-    jobs_file = slurm_dir / "jobs.txt"
+    """Write jobs.txt and the sbatch script in the plan's working directory."""
+    workdir = Path(plan["workdir"])
+    (workdir / "logs").mkdir(parents=True, exist_ok=True)
+    jobs_file = workdir / JOBS_FILE
     jobs_file.write_text("\n".join(plan["subjects"]) + "\n")
 
     resources = participant_resources(plan)
     context = {
         **tool_invocation(plan, repo_dir, invoke_bin),
-        "output": shlex.quote(str(Path(plan["output_dir"]).resolve())),
-        "logs": logs_path(output_dir, "slurm"),
+        "output": shlex.quote(plan["output_dir"]),
+        "workdir": shlex.quote(str(workdir)),
+        "logs": workdir / "logs",
         "jobs": shlex.quote(str(jobs_file)),
         "header": header(command_line),
     }
-    files = {
-        "skullstrip_array.sh": array_script(len(plan["subjects"]), resources, context),
-        "skullstrip_report.sh": report_script(len(plan["runs"]), context),
-        "submit.sh": SUBMIT_SCRIPT,
-    }
-    for name, text in files.items():
-        (slurm_dir / name).write_text(text)
-        (slurm_dir / name).chmod(0o755)
-    return slurm_dir, resources
+    sbatch_file = workdir / SBATCH_FILE
+    sbatch_file.write_text(sbatch_script(len(plan["subjects"]), resources, context))
+    return sbatch_file, resources
 
 
 def tool_invocation(plan, repo_dir, invoke_bin):
@@ -71,13 +64,13 @@ def tool_invocation(plan, repo_dir, invoke_bin):
     How a job calls the tool: `setup` lines, then the `invoke` command prefix.
 
     From the tool's container, the job runs that same .sif with every folder
-    of the plan (and the node's local disk) bound at the same path. Otherwise
-    it runs this checkout's invoke, from the checkout.
+    it uses (and the node's local disk) bound at the same path. Otherwise it
+    runs this checkout's invoke, from the checkout.
     """
     if os.environ.get("SKULLSTRIP_BENCH_IN_CONTAINER"):
         image = os.environ.get("APPTAINER_CONTAINER", "/path/to/skullstrip-bench.sif")
         # The tools' requirements ship inside the image: nothing to bind.
-        folders = [plan[key] for key in ("bids_dir", "containers_dir", "output_dir")]
+        folders = [plan[key] for key in ("bids_dir", "containers_dir", "output_dir", "workdir")]
         binds = ",".join(shlex.quote(folder) for folder in folders) + ',"$SLURM_TMPDIR"'
         return {"setup": "",
                 "invoke": f"apptainer exec --bind {binds} {shlex.quote(image)} skullstrip-bench"}
@@ -136,35 +129,35 @@ def header(command_line):
             f"#   {command_line}\n")
 
 
-def array_script(n_subjects, resources, context):
+def sbatch_script(n_subjects, resources, context):
     """The job array: task N processes the participant on line N of jobs.txt."""
     per_tool = "\n".join(f"#   {name}: {minutes} min per T1w ({source})"
                          for name, (minutes, source) in resources["per_tool"].items())
     return f"""#!/bin/bash
 # skullstrip-bench: one array task = one participant (one line of jobs.txt),
-# every selected tool run on all of that participant's T1w images.
+# every selected tool run on all of that participant's T1w images, after
+# which the participant is added to the report in {context['output']}.
 {context['header']}#
 # BEFORE SUBMITTING
-#   1. Replace {ACCOUNT_PLACEHOLDER} with your allocation (e.g. def-yourpi or rrg-yourpi),
-#      here and in skullstrip_report.sh.
-#   2. Choose which participants to launch with --array (line numbers of jobs.txt):
+#   1. Replace {ACCOUNT_PLACEHOLDER} below with your allocation (e.g. def-yourpi).
+#   2. --array picks the participants (line numbers of jobs.txt):
 #        {f"--array=1-{n_subjects}":<20} every participant ({n_subjects} lines in jobs.txt)
 #        {f"--array=1-{min(20, n_subjects)}":<20} a pilot on the first {min(20, n_subjects)}
 #        {f"--array=1-{n_subjects}%50":<20} every participant, at most 50 running at once
-#   3. Submit with ./submit.sh, which also schedules the report after the array.
+#   3. Submit:  sbatch {SBATCH_FILE}
 #
 # Resources are for ONE participant (the tools run one after the other):
 {per_tool}
 #   expected {resources['expected_minutes']} min, walltime with margin: {resources['minutes']} min
-# After a pilot, re-run the same command: measured durations replace estimates.
+# After a pilot, generate this file again: measured durations replace estimates.
 #SBATCH --account={ACCOUNT_PLACEHOLDER}
 #SBATCH --job-name=skullstrip-bench
 #SBATCH --array=1-{n_subjects}
 #SBATCH --cpus-per-task={resources['cpus']}
 #SBATCH --mem={resources['mem_gb']}G
 #SBATCH --time={hours_minutes(resources['minutes'])}
-#SBATCH --output={context['logs']}/array_%A_%a.log
-#SBATCH --error={context['logs']}/array_%A_%a.err
+#SBATCH --output={context['logs']}/slurm_%A_%a.log
+#SBATCH --error={context['logs']}/slurm_%A_%a.err
 
 set -euo pipefail
 module load apptainer
@@ -176,48 +169,9 @@ if [ -z "$SUBJECT" ]; then
 fi
 echo "Participant $SUBJECT (array task ${{SLURM_ARRAY_TASK_ID}})"
 
-{context['setup']}# Work on the node's local disk; only masks, logs and records reach --output.
+{context['setup']}# Work on the node's local disk; the tools' logs go to {context['workdir']}/logs/.
 {context['invoke']} run-skullstrip --output {context['output']} --subjects "$SUBJECT" \\
     --threads "$SLURM_CPUS_PER_TASK" --work-root "$SLURM_TMPDIR/work"
-# Add this participant to the report: its pictures, metrics and rows, then
-# rebuild report/report.html (open it any time; reload to see new participants).
+# Add this participant to the report (open it any time; reload to see new ones).
 {context['invoke']} run-update --output {context['output']} --subjects "$SUBJECT"
-"""
-
-
-def report_script(n_runs, context):
-    """The final job: metrics (consensus needs every tool) and the HTML report."""
-    minutes = round_up(REPORT_BASE_MINUTES + n_runs * REPORT_MINUTES_PER_RUN,
-                       TIME_STEP_MINUTES)
-    return f"""#!/bin/bash
-# skullstrip-bench: metrics and HTML report, once every array task has ended.
-{context['header']}#
-# Replace {ACCOUNT_PLACEHOLDER} with your allocation before submitting.
-#SBATCH --account={ACCOUNT_PLACEHOLDER}
-#SBATCH --job-name=skullstrip-bench-report
-#SBATCH --cpus-per-task=1
-#SBATCH --mem=8G
-#SBATCH --time={hours_minutes(minutes)}
-#SBATCH --output={context['logs']}/report_%j.log
-#SBATCH --error={context['logs']}/report_%j.err
-
-set -euo pipefail
-module load apptainer
-{context['setup']}{context['invoke']} run-aggregate --output {context['output']}
-"""
-
-
-SUBMIT_SCRIPT = f"""#!/bin/bash
-# Submit the array, then the report job. The report waits for every array task
-# to end, successfully or not: failed runs are part of the report.
-set -euo pipefail
-cd "$(dirname "$0")"
-if grep -q "{ACCOUNT_PLACEHOLDER}" skullstrip_array.sh skullstrip_report.sh; then
-    echo "Edit --account in skullstrip_array.sh and skullstrip_report.sh first." >&2
-    exit 1
-fi
-array_job=$(sbatch --parsable skullstrip_array.sh)
-echo "Array job $array_job submitted"
-report_job=$(sbatch --parsable --dependency=afterany:${{array_job%%;*}} skullstrip_report.sh)
-echo "Report job $report_job will start once the array has ended"
 """

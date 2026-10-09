@@ -37,14 +37,15 @@ def run_check(paths, engine=None, scheduler="local", subjects=None, tools=None, 
     Run every check, print a summary, write and return the plan.
 
     `paths` holds `bids_dir` and `containers_dir` (the user's), `tools_dir`
-    and `requirements_dir` (this project's), and `output_dir`.
+    and `requirements_dir` (this project's), `output_dir` (the report) and
+    `workdir` (logs, and the sbatch script in cluster mode).
     """
     t1w_images = check_dataset(paths["bids_dir"], subjects, smoke)
     engine = check_engine(engine, scheduler)
     usable_tools = check_tools(paths, engine, tools, require_sif=scheduler == "slurm")
     writable = check_output(paths["output_dir"])
 
-    runs = [make_run(tool_name, t1w, paths["output_dir"])
+    runs = [make_run(tool_name, t1w, paths["output_dir"], paths["workdir"])
             for t1w in t1w_images for tool_name in usable_tools]
     plan = {
         "ready": bool(runs) and engine is not None and writable,
@@ -187,10 +188,11 @@ def check_output(output_dir):
     return False
 
 
-def make_run(tool_name, t1w, output_dir):
+def make_run(tool_name, t1w, output_dir, workdir):
     """
-    One (T1w × tool) run, with every path it reads or writes: its logs are
-    visible, its mask, record and scratch folder are internal state.
+    One (T1w × tool) run, with every path it reads or writes: its logs go to
+    the working directory, its mask, record and scratch folder are internal
+    state of the output folder.
     """
     stem = t1w["stem"]
     return {
@@ -200,8 +202,8 @@ def make_run(tool_name, t1w, output_dir):
         "t1w": t1w["path"],
         "mask": str(derivative_mask_path(state_path(output_dir, "masks"), tool_name, t1w)),
         "record": str(state_path(output_dir, "runs", tool_name, f"{stem}.json")),
-        "log": str(logs_path(output_dir, tool_name, f"{stem}.log")),
-        "err": str(logs_path(output_dir, tool_name, f"{stem}.err")),
+        "log": str(logs_path(workdir, tool_name, f"{stem}.log")),
+        "err": str(logs_path(workdir, tool_name, f"{stem}.err")),
         "work_dir": str(state_path(output_dir, "work", tool_name, stem)),
     }
 

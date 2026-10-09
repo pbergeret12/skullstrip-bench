@@ -198,3 +198,8 @@ cython_debug/
 
 # macOS Finder metadata
 .DS_Store
+
+# Written in the working directory by skullstrip-bench runs (see analysis/layout.py)
+logs/
+jobs.txt
+*.sbatch

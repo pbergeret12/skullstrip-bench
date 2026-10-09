@@ -23,7 +23,8 @@ You bring only your dataset and the container images; anything else a supported 
 | ---- | ----------------- |
 | `--bids` | The BIDS dataset. Only `dataset_description.json` and the T1w images in each subject's anat folder (sessions allowed) are read. |
 | `--containers` | A folder holding only container images: Docker archives `<name>.tar` (from `docker save`) and/or Apptainer `<name>.sif`, named as in [Compatible containers](#compatible-containers). |
-| `--output` | Where every result goes (default `output_data/` in this repository). Use one output folder per dataset. |
+| `--output` | Where the report goes (default `output_data/` in this repository). Use one output folder per dataset. |
+| `--workdir` | Where the logs go, and with `--scheduler slurm` the sbatch script and `jobs.txt` (default: the directory you run the command from). |
 
 To avoid retyping the paths on one machine, set defaults under `inputs:` in `invoke.yaml`.
 
@@ -31,25 +32,24 @@ To avoid retyping the paths on one machine, set defaults under `inputs:` in `inv
 
 Then each participant is processed in turn. A run fails, is recorded, and the next one starts when the tool errors, runs out of memory, exceeds the tool's `timeout_min`, or produces a mask that is missing, not binary or off the T1w grid.
 
-The output folder holds only what you need to look at:
+What you get is split between the output folder and the working directory:
 
 ```
-<output>/
-  report/report.html           the report
-  report/figures/              its pictures, a thumbnail and a full-size version per run
-  report/metrics.csv           volume, Dice, duration and status of each run
-  logs/<tool>/<stem>.log       what the tool printed, after a first line with the exact command
-  logs/<tool>/<stem>.err       its errors, ending with why the run failed if it did
-  logs/slurm/                  the cluster jobs' .log and .err
+<workdir>/                       the directory you run the command from
+  logs/<tool>/<stem>.log         what the tool printed, after a first line with the exact command
+  logs/<tool>/<stem>.err         its errors, ending with why the run failed if it did
+  <output>/report.html           the report
+  <output>/figures/              its pictures, a thumbnail and a full-size version per run
+  <output>/metrics.csv           volume, Dice, duration and status of each run
 ```
 
-Everything the tool keeps for itself lives in the hidden folder `<output>/.skullstrip-bench/`: the plan, the record of each run (which is how a repeated `run` knows what is already done), the masks (needed to recompute the Dice when a run is retried or a tool added), the parts of the incremental report, the generated Slurm scripts and the provenance records. The raw files each tool writes are deleted at the end of its run.
+Everything the tool keeps for itself lives in the hidden folder `<output>/.skullstrip-bench/`: the plan, the record of each run (which is how a repeated `run` knows what is already done), the masks (needed to recompute the Dice when a run is retried or a tool added), the parts of the incremental report and the provenance records. The raw files each tool writes are deleted at the end of its run.
 
 Every step skips work whose output already exists, so `run` is cheap to repeat. Failed runs count as done too, so a slow tool that crashed is not relaunched every time: retry them with `uv run invoke run-skullstrip --output … --retry-failed`, or redo one tool with `uv run invoke clean-skullstrip --output … --tools fsl-bet`. The other side of this is that editing the code does not re-run anything; `run … --force` cleans the output folder and starts over.
 
 ## Judging the masks
 
-Open `report/report.html` in the output folder. The report is incremental: each participant is added as soon as its runs are done, so you can open it at any time, and reload it to see the participants finished since. The header says how many participants are processed.
+Open `report.html` in the output folder. The report is incremental: each participant is added as soon as its runs are done, so you can open it at any time, and reload it to see the participants finished since. The header says how many participants are processed.
 
 There is one row per T1w and one column per tool. Each cell shows the T1w with the mask's outline in red, in axial, coronal and sagittal views, with the same slices for every tool. Clicking a picture opens a high-resolution version: zoom with the mouse wheel, drag to move, and use the arrow keys to switch to another tool (left, right) or T1w (up, down) at the same zoom and position. Under each picture are the mask volume, highlighted outside the plausible range set in `invoke.yaml` (`report: plausible_volume_ml`, 1100 to 1600 mL by default), the Dice against the consensus of the tools, and the runtime. A failed run shows its error instead.
 
@@ -135,29 +135,35 @@ apptainer run --bind "$binds" "$TOOL_SIF" run \
     --tools synthstrip,fsl-bet --subjects "$SUBJECTS"
 ```
 
-If the nested check fails, the job stops there (`set -e`) and its output shows Apptainer's message, which is what to send to the cluster's support. Otherwise the report in the output folder holds the two participants.
+If the nested check fails, the job stops there (`set -e`) and its output shows Apptainer's message, which is what to send to the cluster's support. Otherwise the report in the output folder holds the two participants, and the tools' logs are in `logs/` in the directory you submitted the job from.
 
 ### Running a whole dataset
 
-`--scheduler slurm` is the flag that says the tool runs on an HPC. Without it, everything runs locally and the tool produces the report. With it, the tool computes nothing: after the check, it writes the Slurm scripts that process the participants in parallel. Run it on a login node:
+`--scheduler slurm` is the flag that says the tool runs on an HPC. Without it, everything runs locally and the tool produces the report. With it, the tool computes nothing: after the check, it writes one sbatch script that processes the participants in parallel. Run it on a login node, from the directory you want to work in:
 
 ```bash
+cd $SCRATCH/my_study
 module load apptainer
-apptainer run --bind /path/bids,/path/containers,$SCRATCH/results skullstrip-bench.sif run \
-    --scheduler slurm --bids /path/bids --containers /path/containers --output $SCRATCH/results \
+apptainer run --bind /path/bids,/path/containers,$PWD skullstrip-bench.sif run \
+    --scheduler slurm --bids /path/bids --containers /path/containers --output $PWD/results \
     --tools synthstrip,fsl-bet
 ```
 
-This writes `<output>/slurm/`, and the command prints the exact path of `submit.sh`. The jobs' own `.log` and `.err` go to `logs/slurm/`.
+This writes two files in the working directory, and the jobs will write their logs next to them:
 
 | File | Content |
 | ---- | ------- |
+| `skullstrip_bench.sbatch` | The job array, the only thing to submit. One task is one participant: every selected tool on all of that participant's T1w images, working on the node's local disk (`$SLURM_TMPDIR`) with the threads Slurm granted, after which the participant is added to the report and the metrics in `results/`. |
 | `jobs.txt` | One participant per line (`sub-XX`). Array task N processes line N. |
-| `skullstrip_array.sh` | The job array. One task is one participant: every selected tool on all of that participant's T1w images, working on the node's local disk (`$SLURM_TMPDIR`) with the threads Slurm granted, after which the participant is added to the report and the metrics right away. |
-| `skullstrip_report.sh` | A final rebuild of metrics and report, plus the provenance record, once the array has ended. |
-| `submit.sh` | Submits the array, then the report job with `--dependency=afterany`. It refuses to submit while the account is still `def-CHANGEME`. |
+| `logs/` | The jobs' own `slurm_<job>_<task>.log` and `.err`, and each tool's `.log` and `.err`. |
 
-Before submitting, open `skullstrip_array.sh` and `skullstrip_report.sh` and replace `def-CHANGEME` with your allocation (for example `def-yourpi`). The array line, `#SBATCH --array=1-N`, runs every participant of `jobs.txt`; change it to `1-20` for a pilot on the first 20, or `1-N%50` to run at most 50 at once. Then submit with `<output>/slurm/submit.sh`. The resources of one array task are filled in from the selected tools: the largest CPU and memory needs, since the tools run one after the other, and a walltime of the sum of their durations × 1.5 + 10 min. Durations come from each tool's YAML, or from durations already measured with Apptainer in that output folder, so after a pilot, generating the scripts again gives walltimes that fit the cluster. `seff <jobid>` shows the real memory peak.
+Open `skullstrip_bench.sbatch` and replace `def-CHANGEME` with your allocation (for example `def-yourpi`). The array line, `#SBATCH --array=1-N`, runs every participant of `jobs.txt`; change it to `1-20` for a pilot on the first 20, or `1-N%50` to run at most 50 at once. Then submit it:
+
+```bash
+sbatch skullstrip_bench.sbatch
+```
+
+There is no separate report job: each task adds its participant to `results/report.html` as soon as it is done, so the report can be opened at any time. The resources of one task are filled in from the selected tools: the largest CPU and memory needs, since the tools run one after the other, and a walltime of the sum of their durations × 1.5 + 10 min. Durations come from each tool's YAML, or from durations already measured with Apptainer in that output folder, so after a pilot, generating the script again gives walltimes that fit the cluster. `seff <jobid>` shows the real memory peak.
 
 ## Compatible containers
 
@@ -203,25 +209,25 @@ Inside the container, `{input}` is the T1w, `{mask}` where to write the mask, `{
 
 | Task               | Description |
 | ------------------ | ----------- |
-| `run`              | The whole pipeline: the check, then participant by participant the runs and the update of metrics and report. With `--scheduler slurm` (running on an HPC) it writes the Slurm scripts to `slurm/` instead; `--force` cleans first. |
+| `run`              | The whole pipeline: the check, then participant by participant the runs and the update of metrics and report. With `--scheduler slurm` (running on an HPC) it writes `skullstrip_bench.sbatch` and `jobs.txt` in the working directory instead; `--force` cleans first. |
 | `run-check`        | Checks the dataset (shallow), tools, images, engine and output without running anything, and writes the plan and the input record (hidden state). Always re-runs. |
 | `run-skullstrip`   | Executes the plan, one container run per (T1w × tool); `--subjects`, `--tools`, `--retry-failed`, `--threads`, `--work-root`. |
-| `run-metrics`      | Updates `report/metrics.csv` (volume, Dice against the consensus, duration and status of each run) for `--subjects` (default all), from per-participant parts. Always re-runs. |
-| `run-report`       | Updates `report/report.html` for `--subjects` (default all): draws their missing pictures, rewrites their rows and rebuilds the page from per-participant parts. |
+| `run-metrics`      | Updates `metrics.csv` (volume, Dice against the consensus, duration and status of each run) for `--subjects` (default all), from per-participant parts. Always re-runs. |
+| `run-report`       | Updates `report.html` for `--subjects` (default all): draws their missing pictures, rewrites their rows and rebuilds the page from per-participant parts. |
 | `run-update`       | `run-metrics` then `run-report` for some participants, which is what each participant's job runs when it is done. |
-| `run-aggregate`    | Rebuilds metrics and report for every participant, then the provenance record. It is the cluster report job. |
+| `run-aggregate`    | Rebuilds metrics and report for every participant, then the provenance record; useful once a cluster run has ended. |
 | `run-smoke`        | A fast end-to-end pass: one T1w with SynthStrip, run locally. |
 | `build-image`      | Builds the tool's own container locally (`docker build` and `docker save` into `skullstrip-bench_<version>.tar`). Releases are built by GitHub instead. |
 | `prepare-images`   | Builds each tool's Apptainer `.sif` from its `.tar`, from a Python checkout. |
 | `verify`           | Checks that code, configuration, data and documentation still agree. |
-| `clean`            | Removes all computed outputs of an output folder. |
+| `clean`            | Removes all computed outputs of an output folder, and the logs and Slurm files of a working directory. |
 | `clean-check`      | Removes the plan and the input record. |
 | `clean-skullstrip` | Removes the runs' logs, masks and records and their report pictures; `--tools` limits it to some tools. |
 | `clean-metrics`    | Removes `metrics.csv` and its parts. |
 | `clean-report`     | Removes the report, its parts and its pictures. |
-| `clean-slurm`      | Removes the generated Slurm scripts (`slurm/`) and the jobs' logs. |
+| `clean-slurm`      | Removes `skullstrip_bench.sbatch`, `jobs.txt` and the jobs' own logs from the working directory. |
 
-Every task that reads or writes results takes `--output` (default `output_data/`). `uv run invoke --list` and `uv run invoke --help <task>` give the details. The checks used during development are `uv run invoke run-smoke --bids … --containers …`, `uv run invoke verify`, `uv run pytest` and `uv run flake8`.
+Every task that reads or writes results takes `--output` (default `output_data/`), and those that write logs or Slurm files take `--workdir` (default the current directory). `uv run invoke --list` and `uv run invoke --help <task>` give the details. The checks used during development are `uv run invoke run-smoke --bids … --containers …`, `uv run invoke verify`, `uv run pytest` and `uv run flake8`.
 
 ## Folder structure
 
@@ -240,4 +246,4 @@ Every task that reads or writes results takes `--output` (default `output_data/`
 
 ## Data
 
-The report, the metrics, the logs and the hidden masks show or describe participants' brains, so everything under the output folder stays out of git, except the two provenance records in `output_data/.skullstrip-bench/`. Keep it that way when running on restricted datasets.
+The report, the metrics, the logs and the hidden masks show or describe participants' brains, so they stay out of git: everything under the output folder except the two provenance records in `output_data/.skullstrip-bench/`, and the `logs/`, `jobs.txt` and `.sbatch` files a run writes in its working directory. Keep it that way when running on restricted datasets.

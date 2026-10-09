@@ -86,12 +86,10 @@ When results start looking stale or inconsistent, reach for `--force` rather tha
 
 ## Skullstrip Bench specifics
 
-**The output folder shows only `report/` and `logs/`** (`analysis/layout.py` decides every path). The user asked for exactly this, so do not add visible outputs:
-- `report/` holds `report.html`, `figures/` and `metrics.csv`;
-- `logs/<tool>/<stem>.log` holds the container's stdout, after a `# command` line and before a final `# skullstrip-bench: <status>` line;
-- `.err` holds its stderr, plus the failure reason;
-- `logs/slurm/` holds the jobs' `.log`/`.err`;
-- with `--scheduler slurm` only, `slurm/` holds the generated sbatch scripts and `jobs.txt`, visible because the user edits them.
+**What the user sees: the report in `--output`, everything else in the working directory** (`analysis/layout.py` decides every path). The user specified exactly this layout, so do not add visible outputs:
+- `<output>/` holds `report.html`, `figures/` and `metrics.csv`, and nothing else visible;
+- `<workdir>/` is where the command is run (or `--workdir`). It holds `logs/<tool>/<stem>.log` (the container's stdout, after a `# command` line and before a final `# skullstrip-bench: <status>` line) and `.err` (its stderr, plus the failure reason);
+- in cluster mode, `<workdir>/` also holds `skullstrip_bench.sbatch` (ONE sbatch script, nothing else to submit), `jobs.txt` and the jobs' `logs/slurm_<job>_<task>.log|.err`.
 
 Everything internal lives in the hidden `.skullstrip-bench/`: plan, run records, masks, report and metrics parts, MANIFEST/PROVENANCE. Masks are kept there, not in the visible output, because a retried run or an added tool changes the consensus, so every Dice of that T1w has to be recomputed from all its masks. Raw tool outputs go to a scratch folder deleted at the end of each run.
 
@@ -132,7 +130,7 @@ Usage examples for clusters (building the `.sif` files from Docker Hub digests o
 
 **Build every download over https.** The dev Mac's institutional network stalls plain-http Ubuntu mirrors: 0 bytes in 60 s, while https answers in 1–3 s. The first build hung for over 20 minutes on `apt-get update`. The Dockerfile therefore switches apt sources to https, copies CA certificates from `buildpack-deps:noble-curl` (the base image has none), and fetches Apptainer's `.deb` with `ADD https://…`. Do not reintroduce `add-apt-repository` or `http://` sources. Typical build: about 3.5 min; image about 300 MB.
 
-**Running on a cluster: `run --scheduler slurm`** (`analysis/slurm.py`) runs only the check, then writes the visible `<output>/slurm/` (the user edits these files): `jobs.txt` (one participant per line, `sub-XX`), `skullstrip_array.sh` (array task N = participant on line N, every tool in sequence, then `run-update` adds that participant to metrics and report), `skullstrip_report.sh` (`run-aggregate`: full rebuild, provenance) and `submit.sh` (chains the report with `--dependency=afterany`, and refuses while `--account` is still `def-CHANGEME`). The sbatch keeps `--account=def-CHANGEME` and `--array=1-N` (all participants): the user edits both in the generated file, never through flags of the tool (a pilot `1-20`, throttled `1-N%50`). `--scheduler slurm` IS the HPC flag: without it the tool runs locally and makes the report; with it, it only writes the sbatch. Array resources: max `cpus`/`mem_gb` of the selected tools; walltime = (sum of per-tool minutes × the most T1w any participant has) × 1.5 + 10 min, rounded up to 15 min, where measured Apptainer durations in `<output>/runs/` replace the YAML `minutes`. In slurm mode the engine is always Apptainer, and every `.sif` must already exist (`prepare-images`, on a login node): array tasks must never build images concurrently. Tasks work on `$SLURM_TMPDIR` (`--work-root`) so only masks, logs and records reach the shared filesystem.
+**Running on a cluster: `run --scheduler slurm`** (`analysis/slurm.py`) runs only the check, then writes ONE sbatch script, `skullstrip_bench.sbatch`, and `jobs.txt` (one participant per line, `sub-XX`) in the working directory; the user runs `sbatch skullstrip_bench.sbatch`. Array task N handles line N: every tool in sequence, then `run-update` adds that participant to metrics and report. There is no separate report job and no submit wrapper: the report is incremental, and the user explicitly wants a single sbatch. The sbatch keeps `--account=def-CHANGEME` and `--array=1-N` (all participants): the user edits both in the generated file, never through flags of the tool (a pilot `1-20`, throttled `1-N%50`). `--scheduler slurm` IS the HPC flag: without it the tool runs locally and makes the report; with it, it only writes the sbatch. Array resources: max `cpus`/`mem_gb` of the selected tools; walltime = (sum of per-tool minutes × the most T1w any participant has) × 1.5 + 10 min, rounded up to 15 min, where measured Apptainer durations in `<output>/runs/` replace the YAML `minutes`. In slurm mode the engine is always Apptainer, and every `.sif` must already exist (`prepare-images`, on a login node): array tasks must never build images concurrently. Tasks work on `$SLURM_TMPDIR` (`--work-root`) so only masks, logs and records reach the shared filesystem.
 
 **Tool-specific notes.**
 - SynthSeg outputs a segmentation: `labels_to_mask` (`analysis/postprocess.py`) keeps label > 0, CSF included as in SynthStrip's default, then resamples it nearest-neighbour onto the T1w grid.
@@ -158,7 +156,7 @@ Usage examples for clusters (building the `.sif` files from Docker Hub digests o
   - a shallow dataset check, and no `fetch` (nothing is ever downloaded);
   - tool requirements bundled in `container_requirements/<tool>/` (declared with `requires:`);
   - `{threads}`, and the Slurm mode.
-- The Slurm mode was tested locally only: script generation, `bash -n`, the `submit.sh` guard, and a simulated array task under Docker with fake `SLURM_*` variables.
+- The Slurm mode was tested locally only: script generation, `bash -n`, and a simulated array task under Docker with fake `SLURM_*` variables.
 - The tool's own container exists (`Dockerfile`, `build-image`). The cluster usage examples are in the README.
 - **Apptainer has run for real (2026-10-07)**, inside the tool's container, with Docker `--privileged` as the outer container: it built `synthstrip_1.8.sif` from the `.tar` and processed sub-10159 in 42 s. The mask was identical voxel for voxel to the Docker one (1483.5 mL).
   - Apptainer refuses an `APPTAINER_TMPDIR` on a path shared from the Mac ("no parent mount point"). Use a container-local or node-local folder.

@@ -1,5 +1,5 @@
 {
-  "command": "/Users/pierrebergeret/Documents/REPOS_GITHUB/skullstrip-bench/.venv/bin/invoke run-smoke --bids /Users/pierrebergeret/Documents/TRAVAIL_DOCTORAT/sample_ds30 --containers /Users/pierrebergeret/Documents/TRAVAIL_DOCTORAT/containers/skullstrip",
+  "command": "/Users/pierrebergeret/Documents/REPOS_GITHUB/skullstrip-bench/.venv/bin/invoke run-smoke --bids /Users/pierrebergeret/Documents/TRAVAIL_DOCTORAT/sample_ds30 --containers /Users/pierrebergeret/Documents/TRAVAIL_DOCTORAT/containers/skullstrip --workdir /private/tmp/claude-502/-Users-pierrebergeret-Documents-REPOS-GITHUB-skullstrip-bench/cf433c3b-fd66-4223-9be8-963f3f872561/scratchpad/smoke_workdir",
   "environment": {
     "lockfiles": {
       "uv.lock": "70b5b9439224598f6e948a2da241e16380ed7ae764d4eb52bb739b696322b35b"
@@ -32,38 +32,30 @@
       }
     },
     "manifest_file": "/Users/pierrebergeret/Documents/REPOS_GITHUB/skullstrip-bench/output_data/.skullstrip-bench/MANIFEST.json",
-    "manifest_sha256": "a9d347bb5c748f025d1cd63d96cfd587b5c7fae6e7d28584313ee16e8b4dc312"
+    "manifest_sha256": "28ff4e0dfb638a34b84a1f58f473a26f6c953bcf495cdae935dfec4b1bde6bc8"
   },
   "outputs": {
-    "logs/synthstrip/sub-10159.err": {
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "size_bytes": 0
-    },
-    "logs/synthstrip/sub-10159.log": {
-      "sha256": "f4bdc92134a4e8cd68d47caa30478e886050ad88c326f6e9554f7539ca0bed8e",
-      "size_bytes": 1024
-    },
-    "report/figures/synthstrip/sub-10159.jpg": {
+    "figures/synthstrip/sub-10159.jpg": {
       "sha256": "cacc1f1743094984b98af3f38362256ec93a1510f00c84dcbbc8a724095a1458",
       "size_bytes": 111197
     },
-    "report/figures/synthstrip/sub-10159_full.jpg": {
+    "figures/synthstrip/sub-10159_full.jpg": {
       "sha256": "e9f84f4aae164f3666f7addaa740dbba7166aea3bb66bf8210e588777746a87e",
       "size_bytes": 886447
     },
-    "report/metrics.csv": {
+    "metrics.csv": {
       "sha256": "48d7e6031c3deeac7a702006cf60b232c62b93d8e07a97422f2498f12e9452f4",
       "size_bytes": 131
     },
-    "report/report.html": {
-      "sha256": "18e672af530ed8d530ffdc910c138c4e89ca7b2e75eadebd1ccc4eab6c585936",
+    "report.html": {
+      "sha256": "6a375ab46911e9ee0c84d5e9127ee1a4442213514fbf8fbf6b45ba5aabeb633c",
       "size_bytes": 1344999
     }
   },
-  "recorded_at": "2026-10-09T14:58:01+00:00",
+  "recorded_at": "2026-10-09T15:27:21+00:00",
   "repository": {
     "branch": "skullstrip-pipeline",
-    "commit": "1a646db52c7dd73c73e29c6c39583a090a5facd9",
+    "commit": "d3c978c6eca3cd52b624cae3726f26b96330d489",
     "dirty": true,
     "remote": "git@github.com:pbergeret12/skullstrip-bench.git",
     "toplevel": "/Users/pierrebergeret/Documents/REPOS_GITHUB/skullstrip-bench"

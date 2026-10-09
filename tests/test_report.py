@@ -49,10 +49,10 @@ def write_subject(tmp_path, runs_dir, subject, statuses):
 
 def update(output_dir, plan, subject):
     state = output_dir / ".skullstrip-bench"
-    update_metrics(state / "runs", state / "metrics_parts", output_dir / "report" / "metrics.csv",
+    update_metrics(state / "runs", state / "metrics_parts", output_dir / "metrics.csv",
                    [subject], tools=list(plan["tools"]))
     update_report(plan, [subject], (1100, 1600))
-    return (output_dir / "report" / "report.html").read_text()
+    return (output_dir / "report.html").read_text()
 
 
 def test_report_grows_as_participants_finish(tmp_path):
@@ -64,12 +64,12 @@ def test_report_grows_as_participants_finish(tmp_path):
     assert "1 / 2 participants processed" in page
     assert page.count('class="cell"') == 2
     assert "boom" in page and 'data-full="data:image/jpeg;base64,' in page
-    assert (tmp_path / "report" / "figures" / "good" / "sub-01_full.jpg").is_file()
+    assert (tmp_path / "figures" / "good" / "sub-01_full.jpg").is_file()
 
     write_subject(tmp_path, runs_dir, "02", {"good": "ok", "bad": "ok"})
     page = update(tmp_path, plan, "02")
     assert "2 / 2 participants processed" in page
     assert page.count('class="cell"') == 4
-    metrics = pd.read_csv(tmp_path / "report" / "metrics.csv")
+    metrics = pd.read_csv(tmp_path / "metrics.csv")
     assert sorted(metrics["subject"].astype(str).str.zfill(2).unique()) == ["01", "02"]
     assert metrics.set_index("stem").loc["sub-02", "dice_consensus"].tolist() == [1.0, 1.0]

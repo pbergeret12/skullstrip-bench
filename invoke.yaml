@@ -53,7 +53,11 @@ verify:
     - "MICCAI2012-Multi-Atlas-Challenge-Data"   # folder inside ANTs' Oasis.zip
     - "jobs.txt"            # written only by --scheduler slurm, under <output>/slurm/
     - "slurm"
-    - "report/*"            # paths inside the user's --output folder
+    - "<workdir>"           # placeholders for the user's working directory
+    - "<output>"            # ... and output folder
+    - "results"             # the output folder the README's examples use
+    - "results/*"
+    - "logs"                # written in the user's working directory
     - "logs/*"
     - ".skullstrip-bench/*"
     - "dataset_description.json"   # lives in the user's BIDS dataset
