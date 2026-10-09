@@ -38,7 +38,8 @@ What you get is split between the output folder and the working directory:
 <workdir>/                       the directory you run the command from
   logs/<tool>/<stem>.log         what the tool printed, after a first line with the exact command
   logs/<tool>/<stem>.err         its errors, ending with why the run failed if it did
-  <output>/report.html           the report
+  <output>/report.html           the report's entry page, listing its pages
+  <output>/pages/                the report's pages, a few participants each
   <output>/figures/              its pictures, a thumbnail and a full-size version per run
   <output>/metrics.csv           volume, Dice, duration and status of each run
 ```
@@ -51,9 +52,11 @@ Every step skips work whose output already exists, so `run` is cheap to repeat. 
 
 Open `report.html` in the output folder. The report is incremental: each participant is added as soon as its runs are done, so you can open it at any time, and reload it to see the participants finished since. The header says how many participants are processed.
 
-There is one row per T1w and one column per tool. Each cell shows the T1w with the mask's outline in red, in axial, coronal and sagittal views, with the same slices for every tool. Clicking a picture opens a high-resolution version: zoom with the mouse wheel, drag to move, and use the arrow keys to switch to another tool (left, right) or T1w (up, down) at the same zoom and position. Under each picture are the mask volume, highlighted outside the plausible range set in `invoke.yaml` (`report: plausible_volume_ml`, 1100 to 1600 mL by default), the Dice against the consensus of the tools, and the runtime. A failed run shows its error instead.
+`report.html` lists the pages of the report and how many of their participants are processed. Every picture is embedded, about 5 MB per participant with four tools, so the report is split into pages of 20 participants by default: choose another size with `--per-page N` when you run the tool, or set `report: participants_per_page` in `invoke.yaml`. To find the size your browser handles comfortably, `uv run invoke run-report --output … --per-page N` splits an existing report again in seconds, without recomputing anything; the new size is kept for the participants still to come.
 
-Rate each mask Good, Bad or Uncertain, add a comment if needed, then use Export ratings (CSV). Ratings are kept in your browser across reloads, including while the report keeps growing, but the CSV export is your real record.
+On each page there is one row per T1w and one column per tool. Each cell shows the T1w with the mask's outline in red, in axial, coronal and sagittal views, with the same slices for every tool. Clicking a picture opens a high-resolution version: zoom with the mouse wheel, drag to move, and use the arrow keys to switch to another tool (left, right) or T1w (up, down) at the same zoom and position. Under each picture are the mask volume, highlighted outside the plausible range set in `invoke.yaml` (`report: plausible_volume_ml`, 1100 to 1600 mL by default), the Dice against the consensus of the tools, and the runtime. A failed run shows its error instead.
+
+Rate each mask Good, Bad or Uncertain, add a comment if needed, then use Export ratings (CSV), page by page. Ratings are kept in your browser across reloads, including while the report keeps growing, but the CSV export is your real record.
 
 The file is self-contained (images embedded) and can be sent as is. It shows participants' brains, though, so share it only where the dataset's rules allow.
 
@@ -213,7 +216,7 @@ Inside the container, `{input}` is the T1w, `{mask}` where to write the mask, `{
 | `run-check`        | Checks the dataset (shallow), tools, images, engine and output without running anything, and writes the plan and the input record (hidden state). Always re-runs. |
 | `run-skullstrip`   | Executes the plan, one container run per (T1w × tool); `--subjects`, `--tools`, `--retry-failed`, `--threads`, `--work-root`. |
 | `run-metrics`      | Updates `metrics.csv` (volume, Dice against the consensus, duration and status of each run) for `--subjects` (default all), from per-participant parts. Always re-runs. |
-| `run-report`       | Updates `report.html` for `--subjects` (default all): draws their missing pictures, rewrites their rows and rebuilds the page from per-participant parts. |
+| `run-report`       | Updates the report for `--subjects` (default all): draws their missing pictures, rewrites their rows and rebuilds their page and `report.html` from per-participant parts. `--per-page N` splits the existing report again. |
 | `run-update`       | `run-metrics` then `run-report` for some participants, which is what each participant's job runs when it is done. |
 | `run-aggregate`    | Rebuilds metrics and report for every participant, then the provenance record; useful once a cluster run has ended. |
 | `run-smoke`        | A fast end-to-end pass: one T1w with SynthStrip, run locally. |

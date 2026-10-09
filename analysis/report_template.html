@@ -53,6 +53,8 @@
   .rating button[data-rating="good"].active { background: var(--good); border-color: var(--good); color: #fff; }
   .rating button[data-rating="bad"].active { background: var(--bad); border-color: var(--bad); color: #fff; }
   .rating button[data-rating="uncertain"].active { background: var(--uncertain); border-color: var(--uncertain); color: #fff; }
+  nav.pages { display: flex; gap: 16px; margin: 0 0 8px; }
+  nav.pages a { color: var(--accent); }
   .status { display: inline-block; background: var(--panel); border: 1px solid var(--line);
             border-radius: 6px; padding: 6px 10px; margin: 0 0 12px; }
   textarea { width: 100%; font: inherit; padding: 6px; border: 1px solid var(--line);
@@ -75,15 +77,17 @@
 </head>
 <body>
 <header>
-  <h1>Skullstrip Bench</h1>
+  <nav class="pages">$navigation</nav>
+  <h1>Skullstrip Bench, page $page of $n_pages</h1>
   <p class="status">
-    <strong>$n_done / $n_planned participants processed</strong> × <strong>$tools</strong>
-    — updated $updated. Reload the page to see participants finished since.
+    <strong>$n_done / $n_on_page participants of this page processed</strong>
+    ($first_subject to $last_subject) × <strong>$tools</strong>, updated $updated.
+    Reload the page to see participants finished since.
   </p>
   <p class="lede">
     Each picture shows the T1w with the mask's outline in red (axial, coronal, sagittal; same
     slices for every tool). There is no ground truth: rate each mask by eye, Good / Bad /
-    Uncertain. Your ratings stay in this browser across reloads; export them as CSV.
+    Uncertain. Your ratings stay in this browser across reloads; export them as CSV on each page.
   </p>
   <p class="lede">
     Metrics only guide the eye. <strong>Volume</strong> is highlighted outside $volume_min–$volume_max mL.
@@ -187,7 +191,7 @@ $rows
     var blob = new Blob([lines.join("\n") + "\n"], { type: "text/csv" });
     var link = document.createElement("a");
     link.href = URL.createObjectURL(blob);
-    link.download = "skullstrip_notes.csv";
+    link.download = "skullstrip_ratings_page_$page.csv";
     document.body.appendChild(link); link.click(); link.remove();
   });
 

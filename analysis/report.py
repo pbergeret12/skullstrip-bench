@@ -7,10 +7,11 @@ Uncertain buttons with a comment field; the notes are exported as CSV by the
 page itself (no server). Images are embedded in base64, so the file can be
 shared alone.
 
-The report is incremental: as soon as a participant is done, its rows are
-written to their own part (internal state, images included) and
-`report/report.html` is rebuilt from every part present. It can be opened at any
-time; reloading it shows the participants finished since.
+The report is incremental and split into pages (see analysis/report_pages.py):
+as soon as a participant is done, its rows are written to their own part
+(internal state, images included), then its page and the entry page
+`report.html` are rebuilt. It can be opened at any time; reloading it shows
+the participants finished since.
 """
 import base64
 import html
@@ -20,10 +21,11 @@ from string import Template
 
 import pandas as pd
 
-from analysis.assemble import rebuild_from_parts, write_atomically
+from analysis.assemble import write_atomically
 from analysis.layout import report_path, state_path
 from analysis.metrics import load_records
 from analysis.report_figures import draw_mask_outline
+from analysis.report_pages import navigation, page_of, rebuild_pages
 
 TEMPLATE_FILE = Path(__file__).with_name("report_template.html")
 STATUS_LABELS = {"failed": "Failed", "oom": "Failed: out of memory",
@@ -35,15 +37,16 @@ MAX_ERROR_CHARACTERS = 600
 def update_report(plan, subjects, plausible_volume_ml):
     """
     Rewrite the report part of each subject (drawing its missing pictures),
-    then rebuild `report.html`. Expects the subjects' metrics parts to exist.
+    then rebuild their pages and the entry page. Expects the subjects'
+    metrics parts to exist. Returns how many participants are processed.
     """
     output_dir = Path(plan["output_dir"])
     tools = sorted(plan["tools"])
     for subject in subjects:
         write_subject_part(subject, tools, output_dir, plausible_volume_ml)
-    return rebuild_from_parts(
-        state_path(output_dir, "report_parts"), ".html", report_path(output_dir, "report.html"),
-        lambda parts: report_page(parts, tools, len(plan["subjects"]), plausible_volume_ml))
+    numbers = sorted({page_of(plan, subject) for subject in subjects} - {None})
+    return rebuild_pages(plan, numbers, lambda parts, number, pages: report_page(
+        parts, tools, number, pages, plausible_volume_ml))
 
 
 def write_subject_part(subject, tools, output_dir, plausible_volume_ml):
@@ -63,12 +66,18 @@ def write_subject_part(subject, tools, output_dir, plausible_volume_ml):
     write_atomically(part, "\n".join(rows))
 
 
-def report_page(parts, tools, n_planned, plausible_volume_ml):
-    """The whole page: header, progress, then every part's rows."""
+def report_page(parts, tools, number, pages, plausible_volume_ml):
+    """One page: navigation, header, progress, then its participants' rows."""
+    page = pages[number - 1]
     return Template(TEMPLATE_FILE.read_text()).substitute(
+        navigation=navigation(number, len(pages)),
+        page=f"{number}",
+        n_pages=len(pages),
+        first_subject=html.escape(page[0]),
+        last_subject=html.escape(page[-1]),
         updated=datetime.now().strftime("%Y-%m-%d %H:%M"),
         n_done=len(parts),
-        n_planned=n_planned,
+        n_on_page=len(page),
         tools=", ".join(tools),
         volume_min=plausible_volume_ml[0],
         volume_max=plausible_volume_ml[1],

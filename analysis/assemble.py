@@ -25,21 +25,26 @@ def write_atomically(path, text):
     temporary.replace(path)
 
 
-def list_parts(parts_dir, suffix):
-    """The parts written so far, sorted by name (one per participant)."""
-    return sorted(Path(parts_dir).glob(f"sub-*{suffix}"))
+def list_parts(parts_dir, suffix, names=None):
+    """
+    The parts written so far, sorted by name (one per participant), or only
+    those among `names` (file names) when given.
+    """
+    parts = sorted(Path(parts_dir).glob(f"sub-*{suffix}"))
+    return parts if names is None else [part for part in parts if part.name in names]
 
 
-def rebuild_from_parts(parts_dir, suffix, output_file, build):
+def rebuild_from_parts(parts_dir, suffix, output_file, build, names=None):
     """
     Write `build(parts)` to `output_file`, until no new part has appeared
-    while it was being written. Returns the parts used.
+    while it was being written. Returns the parts used. With `names`, only
+    those parts are used (e.g. the participants of one report page).
     """
-    parts = list_parts(parts_dir, suffix)
+    parts = list_parts(parts_dir, suffix, names)
     for _ in range(MAX_REBUILDS):
         seen = snapshot(parts)
         write_atomically(output_file, build(parts))
-        parts = list_parts(parts_dir, suffix)
+        parts = list_parts(parts_dir, suffix, names)
         if snapshot(parts) == seen:
             break
     return parts

@@ -32,7 +32,8 @@ def fail(message):
     print(f"  ✘ {message}")
 
 
-def run_check(paths, engine=None, scheduler="local", subjects=None, tools=None, smoke=False):
+def run_check(paths, engine=None, scheduler="local", subjects=None, tools=None, smoke=False,
+              per_page=20):
     """
     Run every check, print a summary, write and return the plan.
 
@@ -52,6 +53,7 @@ def run_check(paths, engine=None, scheduler="local", subjects=None, tools=None, 
         "skullstrip_bench_version": tool_version(),
         "engine": engine,
         "scheduler": scheduler,
+        "participants_per_page": per_page,
         **{key: str(value) if value else None for key, value in paths.items()},
         "subjects": sorted({f"sub-{t1w['entities']['sub']}" for t1w in t1w_images}),
         "tools": usable_tools,

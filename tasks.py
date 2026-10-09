@@ -22,6 +22,9 @@ PATH_HELP = {
     "workdir": "Where logs/ (and, with --scheduler slurm, the sbatch script and "
                "jobs.txt) are written (default: the current directory).",
 }
+PER_PAGE_HELP = ("Participants per report page (default: report.participants_per_page in "
+                 "invoke.yaml). Each page embeds its pictures, so keep pages light enough "
+                 "for a browser.")
 SELECTION_HELP = {
     "tools": "Comma-separated tools, e.g. synthstrip,fsl-bet "
              "(default: every compatible image in --containers).",
@@ -94,6 +97,14 @@ def load_plan(c, output=None):
     return plan
 
 
+def write_plan(c, plan):
+    """Save a changed plan (e.g. a new page size) for the next steps and jobs."""
+    import json
+
+    from analysis.assemble import write_atomically
+    write_atomically(state(c, plan["output_dir"], "plan.json"), json.dumps(plan, indent=2) + "\n")
+
+
 def record_inputs(c, plan):
     """
     Record what the inputs resolved to (paths, git commit of a dataset that is
@@ -112,9 +123,10 @@ def record_inputs(c, plan):
 @task(help={**PATH_HELP, **SELECTION_HELP,
             "engine": "Force a container engine: docker or apptainer (default: auto).",
             "scheduler": "local (run here) or slurm (cluster jobs: Apptainer, .sif required).",
+            "per_page": PER_PAGE_HELP,
             "smoke": "Keep only the first T1w (used by run-smoke)."})
 def run_check(c, bids=None, containers=None, output=None, workdir=None, tools=None,
-              subjects=None, engine=None, scheduler="local", smoke=False):
+              subjects=None, engine=None, scheduler="local", per_page=None, smoke=False):
     """
     Check dataset, tools, images, requirements, engine and output — run nothing.
 
@@ -131,9 +143,11 @@ def run_check(c, bids=None, containers=None, output=None, workdir=None, tools=No
 
     if scheduler not in SCHEDULERS:
         raise Exit(f"❌ Unknown --scheduler '{scheduler}' (choose from {', '.join(SCHEDULERS)}).")
+    report_settings = c.config.get("report")
     plan = check_everything(input_paths(c, bids, containers, output, workdir),
                             engine=engine, scheduler=scheduler, subjects=split_list(subjects),
-                            tools=split_list(tools), smoke=smoke)
+                            tools=split_list(tools), smoke=smoke,
+                            per_page=int(per_page or report_settings["participants_per_page"]))
     if not plan["ready"]:
         raise Exit("❌ Nothing can run: fix the ✘ above, then `invoke run-check` again.")
     record_inputs(c, plan)
@@ -222,24 +236,31 @@ def run_metrics(c, output=None, subjects=None):
     print(f"📊 {len(parts)} participants → {metrics_csv}")
 
 
-@task(help={"output": PATH_HELP["output"], "subjects": SELECTION_HELP["subjects"]})
-def run_report(c, output=None, subjects=None):
+@task(help={"output": PATH_HELP["output"], "subjects": SELECTION_HELP["subjects"],
+            "per_page": "Split the existing report again with this many participants per "
+                        "page (nothing is recomputed); kept for the next updates."})
+def run_report(c, output=None, subjects=None, per_page=None):
     """
-    Update <output>/report/report.html: one row per T1w, one column per tool, each
-    cell showing the mask's outline on the T1w, its metrics, and Good / Bad /
-    Uncertain buttons with a comment box (ratings exported as CSV by the page).
+    Update the report: <output>/report.html lists the pages, and each page in
+    <output>/pages/ has one row per T1w and one column per tool, each cell
+    showing the mask's outline on the T1w, its metrics, and Good / Bad /
+    Uncertain buttons with a comment box (ratings exported as CSV per page).
 
     Each participant has its own part (internal state, its pictures
     embedded), rewritten here after drawing its missing pictures (cached in
-    report/figures/); report.html is then rebuilt from every part. It can be opened
-    at any time: reloading shows the participants finished since.
+    figures/); its page and report.html are then rebuilt. It can be opened at
+    any time: reloading shows the participants finished since.
     """
     from analysis.report import update_report
 
     plan = load_plan(c, output)
-    parts = update_report(plan, planned_subjects(plan, subjects),
-                          c.config.get("report")["plausible_volume_ml"])
-    print(f"📄 {len(parts)} / {len(plan['subjects'])} participants → "
+    if per_page:
+        plan["participants_per_page"] = int(per_page)
+        write_plan(c, plan)
+    done = update_report(plan, planned_subjects(plan, subjects),
+                         c.config.get("report")["plausible_volume_ml"])
+    print(f"📄 {done} / {len(plan['subjects'])} participants, "
+          f"{plan['participants_per_page']} per page → "
           f"{Path(plan['output_dir']) / 'report.html'}")
 
 
@@ -285,9 +306,10 @@ def run_aggregate(c, output=None):
             "engine": "Force a container engine: docker or apptainer (default: auto).",
             "scheduler": "local: run everything here (default). slurm: run nothing, "
                          "write job scripts in <output>/slurm/ instead.",
+            "per_page": PER_PAGE_HELP,
             "force": "Delete every computed output first, then run from scratch."})
 def run(c, bids=None, containers=None, output=None, workdir=None, tools=None,
-        subjects=None, engine=None, scheduler="local", force=False):
+        subjects=None, engine=None, scheduler="local", per_page=None, force=False):
     """
     Full pipeline: check, then participant by participant: skullstrip runs,
     metrics, report update (the report grows as participants finish).
@@ -306,7 +328,7 @@ def run(c, bids=None, containers=None, output=None, workdir=None, tools=None,
         clean(c, output=output, workdir=workdir)
     plan = run_check(c, bids=bids, containers=containers, output=output, workdir=workdir,
                      tools=tools,
-                     subjects=subjects, engine=engine, scheduler=scheduler)
+                     subjects=subjects, engine=engine, scheduler=scheduler, per_page=per_page)
     if scheduler == "slurm":
         write_slurm(plan)
         return

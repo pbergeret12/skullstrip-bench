@@ -3,9 +3,12 @@
 This is the default output folder (`--output`); any other output folder gets
 the same layout. It holds the report and nothing else visible.
 
-`report.html` is the self-contained visual report (images embedded), to open
-in a browser at any time and rate each mask Good, Bad or Uncertain. It grows
-as participants finish, so reload it to see the latest.
+`report.html` is the report's entry page: it lists the pages of the report
+and how many of their participants are processed. `pages/` holds the pages
+themselves (page_001.html and so on, `participants_per_page` participants
+each), self-contained with their images embedded, to open in a browser at any
+time and rate each mask Good, Bad or Uncertain. Both grow as participants
+finish, so reload them to see the latest.
 
 `figures/` holds its pictures: figures/TOOL/STEM.jpg as the thumbnail and
 STEM_full.jpg for the zoom viewer, the T1w with the mask's outline in red.
