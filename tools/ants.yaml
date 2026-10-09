@@ -1,6 +1,6 @@
 # ANTs antsBrainExtraction.sh with the OASIS template. The template is not in
-# the image: put the three files below in <requirements>/ants/ (see README,
-# "Compatible containers"). Thread count comes from
+# the ANTs image: its three files ship with Skullstrip Bench, in
+# container_requirements/ants/. Thread count comes from
 # ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS, which the launcher sets.
 name: ants
 image: antsx/ants:latest
