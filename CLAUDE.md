@@ -28,9 +28,9 @@ External requirements: Docker (with its daemon running) **or** Apptainer. Contai
 
 ```bash
 # Every task that reads or writes results takes --output (default: output_data/).
-uv run invoke run-check --bids PATH --containers PATH [--requirements PATH] [--output PATH]
+uv run invoke run-check --bids PATH --containers PATH [--output PATH]
                               # Check everything (shallow), write the plan (hidden state); runs nothing
-uv run invoke run --bids PATH --containers PATH [--requirements PATH] [--output PATH] \
+uv run invoke run --bids PATH --containers PATH [--output PATH] \
                   [--tools a,b] [--subjects 01,02] [--engine docker|apptainer]
                               # Full pipeline, locally (cached: skips runs already done)
 uv run invoke run … --scheduler slurm   # Write Slurm scripts (hidden state) instead of running
@@ -54,9 +54,9 @@ uv run flake8                 # Linter (configured in setup.cfg)
 
 **`pre=` chains do not fire when a task is called as a function.** A `pre=` list only runs when invoke executes that task from the command line. `run(c)` or `clean(c)` called from Python executes the body alone — so a `clean` whose real work lives entirely in `pre=` deletes nothing when `run --force` calls it, silently and with a success message. Umbrella tasks that other tasks call therefore do their work in the body. Keep `pre=` only where the task is purely a command-line entry point (never called by another task), and remember that anything threading a flag through — `--force`, `--smoke`, a chunk selector — must call its steps directly, since a `pre=` chain has already run by the time the body sees the flag.
 
-**No fetch step.** The airoh template gathers inputs with `fetch` tasks (download, or symlink into `source_data/`). This project removed them on purpose. It must run on cluster compute nodes without internet (Digital Research Alliance of Canada, among others), so it never downloads anything, and it reads its inputs in place: `--bids`, `--containers`, `--requirements`, with defaults under `inputs:` in `invoke.yaml`. `run-check` records what those paths resolved to (and their git commit when they are repositories) in `<output>/MANIFEST.json`, through airoh's `record_sources`. Do not reintroduce a download step, or a library that fetches resources at runtime (e.g. templateflow): anything a tool needs besides its image goes in the user's requirements folder.
+**No fetch step.** The airoh template gathers inputs with `fetch` tasks (download, or symlink into `source_data/`). This project removed them on purpose. It must run on cluster compute nodes without internet (Digital Research Alliance of Canada, among others), so it never downloads anything, and it reads its inputs in place: `--bids` and `--containers`, with defaults under `inputs:` in `invoke.yaml`. `run-check` records what those paths resolved to (and their git commit when they are repositories) in `<output>/MANIFEST.json`, through airoh's `record_sources`. Do not reintroduce a download step, or a library that fetches resources at runtime (e.g. templateflow): anything a tool needs besides its image ships with the project (see **The user brings only images and a dataset**).
 
-- `invoke.yaml` — config: `inputs:` (defaults for --bids, --containers, --requirements), `output_data_dir` (default --output), `tools_dir`, the report's plausible volume range, provenance file names
+- `invoke.yaml` — config: `inputs:` (defaults for --bids and --containers), `requirements_dir` (the bundled container_requirements/), `output_data_dir` (default --output), `tools_dir`, the report's plausible volume range, provenance file names
 - `tasks.py` — project-specific invoke tasks; uses `airoh.provenance` (input and run records) and `airoh.verify`
 - `analysis/` — pure Python analysis logic, called by tasks in `tasks.py`
 - `tools/` — one YAML per skull-stripping tool, and nothing else (see **Skullstrip Bench specifics** below)
@@ -109,7 +109,15 @@ Locally, `run` goes participant by participant the same way. Only the plan's too
 
 **Engine logic lives only in `analysis/launcher.py`.** Docker (`docker run --rm --platform linux/amd64 --entrypoint "" -v …`) and Apptainer (`apptainer exec --compat --bind …`) are at parity, auto-detected (Apptainer first) or forced with `run-check --engine`. Images are never downloaded: Docker `docker load -i <name>.tar` if the image is not loaded yet; Apptainer uses `<name>.sif`, building it once from `<name>.tar` (`apptainer build <name>.sif docker-archive://<name>.tar`) inside the containers folder and keeping it. Containers write only into mounted folders. Dev machine: macOS (Apple Silicon) + Docker, so amd64 images run emulated; Apptainer is tested in a Lima VM and on the cluster.
 
-**Adding a tool = one YAML in `tools/` + one image in the containers folder** (+ its files in the requirements folder, if any). Keys: `name` (must equal the file name), `image` (Docker reference), `container` (image file base name), `command` (the full command, with placeholders `{input}`, `{mask}`, `{output_prefix}`, `{requirements}`, `{threads}` resolved to container paths/values). Optional keys: `mask_output` (default `{mask}`), `postprocess` (`labels_to_mask`), `requires` (file names expected in `<requirements>/<name>/`, mounted read-only as `{requirements}`), `timeout_min`, and the cluster resources of one run: `cpus`, `mem_gb`, `minutes`. Nothing but YAML lives in `tools/`. The launcher caps threads in every container through `OMP_NUM_THREADS` and `ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS` (`--threads`, default `$SLURM_CPUS_PER_TASK`, else all cores). When the timeout runs out, the run is recorded as `timeout`. A Docker container is named so the launcher can `docker kill` it, because killing `docker run` alone leaves the container running in the VM. A dead Docker VM makes `docker run` hang rather than fail, which is what the timeout guards against. Do not write `${VAR}` in a command, since braces are placeholders; `$VAR` is expanded by the shell inside the container. The README's "Compatible containers" table must list every tool in `tools/`.
+**The user brings only images and a dataset.** This is a hard requirement from the user, stated more than once:
+- a user provides nothing but the container images of supported tools and a BIDS dataset;
+- anything a supported tool needs besides its image (atlas, template, config file) ships with Skullstrip Bench, in `container_requirements/<tool>/`, both in the repository and in the tool's own container (`requirements_dir` in `invoke.yaml`, resolved from `PROJECT_DIR`);
+- there is no `--requirements` flag, and there must never be one;
+- `tests/test_tool_configs.py` fails if a tool's `requires:` file is not bundled.
+
+ANTs' OASIS template (32 MB, CC BY 4.0, see `container_requirements/ants/SOURCE.md`) is tracked in git on purpose, exempted in `verify.ignore_paths`. Inside the tool's container the requirements live in the image, so the Slurm scripts do not bind them.
+
+**Adding a tool = one YAML in `tools/` + its image in the containers folder** (+ its extra files in `container_requirements/<tool>/`, if any). Keys: `name` (must equal the file name), `image` (Docker reference), `container` (image file base name), `command` (the full command, with placeholders `{input}`, `{mask}`, `{output_prefix}`, `{requirements}`, `{threads}` resolved to container paths/values). Optional keys: `mask_output` (default `{mask}`), `postprocess` (`labels_to_mask`), `requires` (file names expected in `container_requirements/<name>/`, mounted read-only as `{requirements}`), `timeout_min`, and the cluster resources of one run: `cpus`, `mem_gb`, `minutes`. Nothing but YAML lives in `tools/`. The launcher caps threads in every container through `OMP_NUM_THREADS` and `ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS` (`--threads`, default `$SLURM_CPUS_PER_TASK`, else all cores). When the timeout runs out, the run is recorded as `timeout`. A Docker container is named so the launcher can `docker kill` it, because killing `docker run` alone leaves the container running in the VM. A dead Docker VM makes `docker run` hang rather than fail, which is what the timeout guards against. Do not write `${VAR}` in a command, since braces are placeholders; `$VAR` is expanded by the shell inside the container. The README's "Compatible containers" table must list every tool in `tools/`.
 
 **The tool's own container** (`Dockerfile`, `container/skullstrip-bench`, `invoke build-image`). Ubuntu 24.04, plus Apptainer 1.5.4 from its official release `.deb` (non-setuid), plus the `uv.lock` environment without dev tools, plus the code and `tools/`. The `VERSION` file is the git commit, and goes into `plan.json` as `skullstrip_bench_version`. The entry point is `invoke --search-root /opt/skullstrip-bench "$@"`, run from the caller's working directory. Running the tasks from it means **nested Apptainer** (the tool's container launches the tools' containers), which needs unprivileged user namespaces on the host. Rules that keep this working:
 - data folders are bound at the **same path** inside, so plan paths hold on both sides;
@@ -125,7 +133,7 @@ Usage examples for clusters (building the `.sif` files from Docker Hub digests o
 
 **Tool-specific notes.**
 - SynthSeg outputs a segmentation: `labels_to_mask` (`analysis/postprocess.py`) keeps label > 0, CSF included as in SynthStrip's default, then resamples it nearest-neighbour onto the T1w grid.
-- ANTs (`antsBrainExtraction.sh`) needs three files of the OASIS template (`ants.yaml`, `requires:`) in `<requirements>/ants/`. The user gets them once from the ANTs templates on figshare, on a machine with internet.
+- ANTs (`antsBrainExtraction.sh`) needs three files of the OASIS template (`ants.yaml`, `requires:`), bundled in `container_requirements/ants/`.
 - Under Docker on Apple Silicon, SynthSeg (TensorFlow) needs more than 8 GB in the Docker VM. With 8 GB the VM crashed outright, and `docker run` then hangs instead of failing: give Docker 12 GB and enable Rosetta emulation.
 
 **BIDS parsing is a small hand-written parser** (`analysis/bids_inputs.py`, adapted from wonkyconn), not pybids. A T1w's `stem` (its filename without `_T1w.nii.gz`) keeps every entity, so derivative names stay unique across sessions, runs and acquisitions. Subjects without a T1w are reported and skipped, not an error.
@@ -136,12 +144,16 @@ Usage examples for clusters (building the `.sif` files from Docker Hub digests o
 
 ## Status and next session
 
+**On Narval (2026-10-09).** The user built the four tools' `.sif` files in the user's scratch test folder from the pinned Docker Hub digests.
+- FSL's build was killed twice on the login node during the SIF compression; the sandbox-then-job route (see README) worked.
+- Next on the cluster: send `skullstrip-bench_<version>.tar`, convert it, generate the scripts with a 2-participant pilot (fast tools), and submit. This is the first real test of nested Apptainer.
+
 **Where things stand (2026-10-07).**
 - All four tools work end to end under Docker on the dev Mac. The 2026-10-06 full run was 5 subjects × 4 tools: 20/20 runs `ok`. Measured under amd64 emulation, per T1w: BET ≈ 8 s, SynthStrip ≈ 17 s, SynthSeg 3–5 min, ANTs ≈ 6.5 min.
 - The user-facing command line is in place:
-  - flags `--bids`, `--containers`, `--requirements`, `--output`, `--tools`, `--subjects`, `--engine`, `--scheduler`;
+  - flags `--bids`, `--containers`, `--output`, `--tools`, `--subjects`, `--engine`, `--scheduler`;
   - a shallow dataset check, and no `fetch` (nothing is ever downloaded);
-  - `container_requirements/<tool>/` with `requires:`;
+  - tool requirements bundled in `container_requirements/<tool>/` (declared with `requires:`);
   - `{threads}`, and the Slurm mode.
 - The Slurm mode was tested locally only: script generation, `bash -n`, the `submit.sh` guard, and a simulated array task under Docker with fake `SLURM_*` variables.
 - The tool's own container exists (`Dockerfile`, `build-image`). The cluster usage examples are in the README.
@@ -155,7 +167,7 @@ Usage examples for clusters (building the `.sif` files from Docker Hub digests o
 **User's local paths (dev Mac):**
 - dataset: `/Users/pierrebergeret/Documents/TRAVAIL_DOCTORAT/sample_ds30`;
 - images: `/Users/pierrebergeret/Documents/TRAVAIL_DOCTORAT/containers/skullstrip`;
-- requirements: `/Users/pierrebergeret/Documents/TRAVAIL_DOCTORAT/containers/container_requirements` (holds `ants/` with the three OASIS files).
+- old 4-tool results (old output layout): `/Users/pierrebergeret/Documents/TRAVAIL_DOCTORAT/skullstrip_bench_results_2026-10-06`.
 
 **Next.**
 1. **Cluster pilot with the tool's container**: build `skullstrip-bench.sif`, run the README's test job, then `--scheduler slurm --slurm-array 1-20` with the fast tools, then use `seff` for real memory and time.
@@ -175,7 +187,7 @@ Usage examples for clusters (building the `.sif` files from Docker Hub digests o
 
 ### Where data lives
 
-> In this project, the inputs are not in `source_data/` (it stays empty): they are read in place from `--bids`, `--containers` and `--requirements` (see **No fetch step**). The template's general guidance below still applies to what is committed and how outputs are tracked. Its parts about fetching and datalad do not apply here.
+> In this project, the inputs are not in `source_data/` (it stays empty): they are read in place from `--bids` and `--containers` (see **No fetch step**). The template's general guidance below still applies to what is committed and how outputs are tracked. Its parts about fetching and datalad do not apply here.
 
 `source_data/` holds inputs and nothing else; `output_data/` holds what the
 pipeline computed. Neither is a scratch directory — a file that is neither a

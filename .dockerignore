@@ -6,5 +6,6 @@
 !invoke.yaml
 !analysis/
 !tools/
+!container_requirements/
 !container/
 **/__pycache__

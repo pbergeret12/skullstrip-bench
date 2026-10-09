@@ -27,10 +27,12 @@ RUN UV_PROJECT_ENVIRONMENT=/opt/venv uv sync --frozen --no-dev --no-install-proj
         --python /usr/bin/python3 \
  && rm -rf /root/.cache
 
-# The project itself (code and tool configs only: no data, no outputs).
+# The project itself: code, tool configs and the tools' bundled requirements
+# (no data, no outputs).
 COPY tasks.py invoke.yaml ./
 COPY analysis ./analysis
 COPY tools ./tools
+COPY container_requirements ./container_requirements
 ARG VERSION=unknown
 RUN echo "$VERSION" > VERSION
 COPY container/skullstrip-bench /usr/local/bin/skullstrip-bench

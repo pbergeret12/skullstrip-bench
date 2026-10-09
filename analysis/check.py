@@ -36,8 +36,8 @@ def run_check(paths, engine=None, scheduler="local", subjects=None, tools=None, 
     """
     Run every check, print a summary, write and return the plan.
 
-    `paths` holds `bids_dir`, `containers_dir`, `requirements_dir` (may be
-    None), `output_dir` and `tools_dir`.
+    `paths` holds `bids_dir` and `containers_dir` (the user's), `tools_dir`
+    and `requirements_dir` (this project's), and `output_dir`.
     """
     t1w_images = check_dataset(paths["bids_dir"], subjects, smoke)
     engine = check_engine(engine, scheduler)
@@ -164,9 +164,9 @@ def usable_tool(tool, engine, paths, require_sif):
     """Print and return whether one tool can run: requirements, then image."""
     missing = missing_requirements(tool, paths["requirements_dir"])
     if missing:
-        where = (f"{paths['requirements_dir']}/{tool['name']}/" if paths["requirements_dir"]
-                 else "--requirements (not given)")
-        fail(f"{tool['name']}: not compatible, missing in {where}: {', '.join(missing)}")
+        fail(f"{tool['name']}: files bundled with skullstrip-bench are missing from "
+             f"{paths['requirements_dir']}/{tool['name']}/ ({', '.join(missing)}): "
+             "this installation is incomplete")
         return False
     if engine is None:
         fail(f"{tool['name']}: no container engine to run it")

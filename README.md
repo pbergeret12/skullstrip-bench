@@ -14,22 +14,20 @@ Install the Python environment with [uv](https://docs.astral.sh/uv/), which also
 
 ```bash
 uv sync
-uv run invoke run --bids /path/to/bids --containers /path/to/images \
-                  --requirements /path/to/container_requirements --output /path/to/results
+uv run invoke run --bids /path/to/bids --containers /path/to/images --output /path/to/results
 ```
 
-The four folders are read in place, nothing is copied or linked:
+You bring only your dataset and the container images; anything else a supported tool needs (such as the ANTs template) ships with Skullstrip Bench. The folders are read in place, nothing is copied or linked:
 
 | Flag | What it points to |
 | ---- | ----------------- |
 | `--bids` | The BIDS dataset. Only `dataset_description.json` and the T1w images in each subject's anat folder (sessions allowed) are read. |
 | `--containers` | A folder holding only container images: Docker archives `<name>.tar` (from `docker save`) and/or Apptainer `<name>.sif`, named as in [Compatible containers](#compatible-containers). |
-| `--requirements` | Only for tools that need extra files (ANTs, today): one subfolder per tool holding its atlases, templates or configs, for example `container_requirements/ants/`. |
 | `--output` | Where every result goes (default `output_data/` in this repository). Use one output folder per dataset. |
 
 To avoid retyping the paths on one machine, set defaults under `inputs:` in `invoke.yaml`.
 
-`run` first runs `run-check`, which launches nothing and takes seconds whatever the dataset size. The dataset check is shallow: it looks for `dataset_description.json`, the `sub-*` folders and the T1w files, and never opens an image, so a broken T1w simply fails its own run. Without `--tools`, every image in `--containers` that has a config in `tools/` and whose required files are in `--requirements` is used, and the other images are reported as not compatible. `--tools synthstrip,fsl-bet` restricts the tools and `--subjects 10159,10171` the participants.
+`run` first runs `run-check`, which launches nothing and takes seconds whatever the dataset size. The dataset check is shallow: it looks for `dataset_description.json`, the `sub-*` folders and the T1w files, and never opens an image, so a broken T1w simply fails its own run. Without `--tools`, every image in `--containers` that has a config in `tools/` is used, and the other images are reported as not compatible. `--tools synthstrip,fsl-bet` restricts the tools and `--subjects 10159,10171` the participants.
 
 Then each participant is processed in turn. A run fails, is recorded, and the next one starts when the tool errors, runs out of memory, exceeds the tool's `timeout_min`, or produces a mask that is missing, not binary or off the T1w grid.
 
@@ -142,7 +140,7 @@ apptainer run --bind /path/bids,/path/containers,$SCRATCH/results skullstrip-ben
 $SCRATCH/results/.skullstrip-bench/slurm/submit.sh
 ```
 
-Add `--requirements /path/container_requirements` (and bind it) when ANTs is among the tools. This writes the following to the hidden `.skullstrip-bench/slurm/` folder, and the command prints the exact path of `submit.sh`. The jobs' own `.log` and `.err` go to `logs/slurm/`.
+This writes the following to the hidden `.skullstrip-bench/slurm/` folder, and the command prints the exact path of `submit.sh`. The jobs' own `.log` and `.err` go to `logs/slurm/`.
 
 | File | Content |
 | ---- | ------- |
@@ -155,24 +153,26 @@ Add `--requirements /path/container_requirements` (and bind it) when ANTs is amo
 
 ## Compatible containers
 
-A container is compatible when `tools/` has a config for it. To run, its image must sit in `--containers` under the file name below, and its required files, if any, must be in `--requirements`.
+A container is compatible when `tools/` has a config for it. To run, its image must sit in `--containers` under the file name below; nothing else is needed from you.
 
-| Tool | Image | File name in `--containers` | Required files in `--requirements` | Output | Runtime per T1w (Mac, amd64 emulation) | Cluster resources |
-| ---- | ----- | --------------------------- | --------------------------------- | ------ | -------------------------------------- | ----------------- |
-| `synthstrip` | `freesurfer/synthstrip:1.8` | `synthstrip_1.8.tar` or `.sif` | none | brain mask (CSF included) | about 17 s | 4 CPUs, 8 GB |
-| `fsl-bet` | `gamorosino/fsl:6.0.7.22` | `fsl_6.0.7.22.tar` or `.sif` | none | brain mask (`bet -m -R`) | about 8 s | 1 CPU, 2 GB |
-| `synthseg` | `cookpa/synthseg:conda-0.2` | `synthseg_conda-0.2.tar` or `.sif` | none | segmentation turned into a mask: every label above 0 (CSF included), resampled onto the T1w grid | 3 to 5 min | 8 CPUs, 16 GB |
-| `ants` | `antsx/ants:latest` | `ants_latest.tar` or `.sif` | `ants/T_template0.nii.gz`, `ants/T_template0_BrainCerebellumProbabilityMask.nii.gz`, `ants/T_template0_BrainCerebellumRegistrationMask.nii.gz` | `antsBrainExtraction.sh` mask | about 6.5 min | 8 CPUs, 8 GB |
+| Tool | Image | File name in `--containers` | Output | Runtime per T1w (Mac, amd64 emulation) | Cluster resources |
+| ---- | ----- | --------------------------- | ------ | -------------------------------------- | ----------------- |
+| `synthstrip` | `freesurfer/synthstrip:1.8` | `synthstrip_1.8.tar` or `.sif` | brain mask (CSF included) | about 17 s | 4 CPUs, 8 GB |
+| `fsl-bet` | `gamorosino/fsl:6.0.7.22` | `fsl_6.0.7.22.tar` or `.sif` | brain mask (`bet -m -R`) | about 8 s | 1 CPU, 2 GB |
+| `synthseg` | `cookpa/synthseg:conda-0.2` | `synthseg_conda-0.2.tar` or `.sif` | segmentation turned into a mask: every label above 0 (CSF included), resampled onto the T1w grid | 3 to 5 min | 8 CPUs, 16 GB |
+| `ants` | `antsx/ants:latest` | `ants_latest.tar` or `.sif` | `antsBrainExtraction.sh` mask, with the OASIS template bundled in `container_requirements/ants/` | about 6.5 min | 8 CPUs, 8 GB |
 
 On a machine with Docker, an image becomes a `.tar` with `docker pull <image> && docker save -o <file name>.tar <image>`; on a cluster, build the `.sif` directly as shown in [Preparing the images](#preparing-the-images).
 
-The three ANTs files come from the OASIS template among the ANTs templates on figshare ([doi:10.6084/m9.figshare.915436](https://doi.org/10.6084/m9.figshare.915436), file `Oasis.zip`, folder `MICCAI2012-Multi-Atlas-Challenge-Data/`). Download it once and copy only those three files into `container_requirements/ants/`.
+The ANTs template (three files, 34 MB) is the OASIS template from the ANTs templates by Brian Avants and Nick Tustison on figshare ([doi:10.6084/m9.figshare.915436](https://doi.org/10.6084/m9.figshare.915436)), redistributed unchanged under the CC BY 4.0 license; see `container_requirements/ants/SOURCE.md`. It is part of the repository and of the tool's own container.
+
+Building the FSL image (about 5 GB) on a cluster login node can be killed by the node's limits during its long compression step. Build it in two steps instead: `apptainer build --sandbox fsl_sandbox docker://…` on the login node (download and extraction only, a few minutes), then `apptainer build fsl_6.0.7.22.sif fsl_sandbox/` inside a job with a few cores, and delete the sandbox.
 
 Under Docker on a Mac, SynthSeg needs at least 12 GB for the Docker virtual machine (it crashed with 8 GB), and long runs need free disk space: a full disk crashed Docker during development. The runtimes above were measured under amd64 emulation on an Apple Silicon Mac and are faster natively.
 
 ### Adding a tool
 
-A tool is one YAML in `tools/` plus one image in the containers folder, and its files in the requirements folder if it needs any:
+A tool is one YAML in `tools/` and its image in the containers folder. If it needs other files (an atlas, a template, a config), they go in `container_requirements/<tool>/` in this repository, so that they ship with the project and its container; users never have to provide them.
 
 ```yaml
 # tools/mytool.yaml
@@ -182,21 +182,21 @@ container: mytool_2.0               # <containers>/mytool_2.0.tar or .sif
 command: mytool --in {input} --mask {mask} --threads {threads}
 # mask_output: "{output_prefix}_mask.nii.gz"   # if the tool picks its own mask name
 # postprocess: labels_to_mask                    # if the tool outputs a segmentation
-# requires: [atlas.nii.gz]                       # files in <requirements>/mytool/
+# requires: [atlas.nii.gz]                       # files in container_requirements/mytool/
 timeout_min: 30                     # stop a run stuck for 30 minutes
 cpus: 4                             # cluster resources for one run
 mem_gb: 8
 minutes: 5                          # expected duration on a cluster node
 ```
 
-Inside the container, `{input}` is the T1w, `{mask}` where to write the mask, `{output_prefix}` a prefix for tools that name their own outputs, `{requirements}` the tool's requirements subfolder (read-only) and `{threads}` the number of cores it may use. The launcher also sets `OMP_NUM_THREADS` and `ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS`, so that a tool never grabs every core of a shared node. Do not write `${VAR}` in a command, since braces are placeholders here; `$VAR` works.
+Inside the container, `{input}` is the T1w, `{mask}` where to write the mask, `{output_prefix}` a prefix for tools that name their own outputs, `{requirements}` the tool's bundled files (read-only) and `{threads}` the number of cores it may use. The launcher also sets `OMP_NUM_THREADS` and `ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS`, so that a tool never grabs every core of a shared node. Do not write `${VAR}` in a command, since braces are placeholders here; `$VAR` works.
 
 ## Tasks
 
 | Task               | Description |
 | ------------------ | ----------- |
 | `run`              | The whole pipeline: the check, then participant by participant the runs and the update of metrics and report. With `--scheduler slurm` it writes job scripts instead (`--slurm-account`, `--slurm-array`); `--force` cleans first. |
-| `run-check`        | Checks the dataset (shallow), tools, images, requirements, engine and output without running anything, and writes the plan and the input record (hidden state). Always re-runs. |
+| `run-check`        | Checks the dataset (shallow), tools, images, engine and output without running anything, and writes the plan and the input record (hidden state). Always re-runs. |
 | `run-skullstrip`   | Executes the plan, one container run per (T1w × tool); `--subjects`, `--tools`, `--retry-failed`, `--threads`, `--work-root`. |
 | `run-metrics`      | Updates `report/metrics.csv` (volume, Dice against the consensus, duration and status of each run) for `--subjects` (default all), from per-participant parts. Always re-runs. |
 | `run-report`       | Updates `report/report.html` for `--subjects` (default all): draws their missing pictures, rewrites their rows and rebuilds the page from per-participant parts. |
@@ -226,6 +226,7 @@ Every task that reads or writes results takes `--output` (default `output_data/`
 | `source_data/` | Empty on purpose, since inputs are read in place; see [`source_data/CONTENT.md`](source_data/CONTENT.md) |
 | `output_data/` | The default `--output`; see [`output_data/CONTENT.md`](output_data/CONTENT.md) |
 | `tasks.py`     | The invoke tasks |
+| `container_requirements/` | Files the supported tools need besides their image, one subfolder per tool (the ANTs template) |
 | `invoke.yaml`  | Configuration: default paths, report range, provenance |
 
 ## Data

@@ -78,8 +78,8 @@ def tool_invocation(plan, repo_dir, invoke_bin):
     """
     if os.environ.get("SKULLSTRIP_BENCH_IN_CONTAINER"):
         image = os.environ.get("APPTAINER_CONTAINER", "/path/to/skullstrip-bench.sif")
-        folders = [plan[key] for key in ("bids_dir", "containers_dir", "requirements_dir",
-                                         "output_dir") if plan[key]]
+        # The tools' requirements ship inside the image: nothing to bind.
+        folders = [plan[key] for key in ("bids_dir", "containers_dir", "output_dir")]
         binds = ",".join(shlex.quote(folder) for folder in folders) + ',"$SLURM_TMPDIR"'
         return {"setup": "",
                 "invoke": f"apptainer exec --bind {binds} {shlex.quote(image)} skullstrip-bench"}

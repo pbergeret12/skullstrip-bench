@@ -9,15 +9,16 @@ A tool config looks like:
     command: mri_synthstrip -i {input} -m {mask} -t {threads}
     mask_output: "{mask}"               # optional: where the tool writes its mask
     postprocess: labels_to_mask         # optional: turn the output into a mask
-    requires: [atlas.nii.gz]            # optional: files in <requirements>/<name>/
+    requires: [atlas.nii.gz]            # optional: files in container_requirements/<name>/
     timeout_min: 30                     # optional: stop a run after 30 minutes
     cpus: 4                             # cluster resources for one run
     mem_gb: 8
     minutes: 5                          # expected duration of one run on a cluster
 
-Files a tool needs besides its image (atlases, templates, configs) never live
-in this repository: they come from the user's requirements folder, in a
-subfolder named after the tool, mounted read-only as `{requirements}`.
+Files a tool needs besides its image (atlases, templates, configs) ship with
+this project, in container_requirements/<name>/ (and inside the tool's own
+container), mounted read-only as `{requirements}`: users bring only their
+images and their dataset.
 """
 from pathlib import Path
 from string import Formatter

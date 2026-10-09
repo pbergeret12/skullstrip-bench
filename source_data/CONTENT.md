@@ -10,12 +10,13 @@ images (sub-X/[ses-Y/]anat/*_T1w.nii.gz) are read.
 `--containers` is a folder holding only container images: Docker archives
 `<name>.tar` (from `docker save`) and/or Apptainer `<name>.sif` files.
 
-`--requirements` is a folder with one subfolder per tool, holding the files
-that tool needs besides its image (atlases, templates, configs).
+Nothing else comes from the user: files a supported tool needs besides its
+image (such as the ANTs template) ship with this project, in
+`container_requirements/`.
 
 What each input resolved to is recorded in the output folder's MANIFEST.json
 (see `output_data/CONTENT.md`).
 
 Access: this project ships no data. Whoever runs it must already have the
-dataset, the images and the requirements on disk. On a restricted dataset its
+dataset and the images on disk. On a restricted dataset its
 own access rules apply, and nothing derived from it should be committed.

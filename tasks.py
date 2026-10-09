@@ -5,9 +5,11 @@ from invoke import task
 # --------------------------------------------------------------------------- #
 # Inputs and outputs
 #
-# Nothing is ever downloaded or copied in: the dataset, the container images
-# and the tools' requirements are read where they are, given by flags (or by
-# defaults under `inputs:` in invoke.yaml). Everything computed goes to
+# Nothing is ever downloaded or copied in: the user brings only the BIDS
+# dataset and the container images, read where they are, given by flags (or
+# by defaults under `inputs:` in invoke.yaml). What a supported tool needs
+# besides its image (e.g. ANTs' template) ships with this project, in
+# container_requirements/. Everything computed goes to
 # --output (default: output_data/): report/ and logs/ for the user, the rest
 # in the hidden .skullstrip-bench/ (see analysis/layout.py and CLAUDE.md,
 # "No fetch step").
@@ -15,8 +17,6 @@ from invoke import task
 PATH_HELP = {
     "bids": "BIDS dataset to benchmark (or `inputs: bids:` in invoke.yaml).",
     "containers": "Folder of container images, .tar and/or .sif (or `inputs: containers:`).",
-    "requirements": "Folder with one subfolder per tool holding the files it needs "
-                    "(atlases, templates…); only needed by tools that declare `requires`.",
     "output": "Where every result goes (default: output_data/).",
 }
 SELECTION_HELP = {
@@ -53,20 +53,23 @@ def state(c, output, *parts):
     return state_path(output_path(c, output), *parts)
 
 
-def input_paths(c, bids=None, containers=None, requirements=None, output=None):
-    """Every path a check needs, from flags or `inputs:` defaults, made absolute."""
+def input_paths(c, bids=None, containers=None, output=None):
+    """
+    Every path a check needs, made absolute: the user's dataset and images
+    (flags or `inputs:` defaults), this project's tool configs and their
+    bundled requirements, and the output folder.
+    """
     from invoke.exceptions import Exit
 
     defaults = c.config.get("inputs") or {}
     bids = bids or defaults.get("bids")
     containers = containers or defaults.get("containers")
-    requirements = requirements or defaults.get("requirements")
     if not bids or not containers:
         raise Exit("❌ Give --bids and --containers (or set them under `inputs:` in invoke.yaml).")
     return {
         "bids_dir": Path(bids).resolve(),
         "containers_dir": Path(containers).resolve(),
-        "requirements_dir": Path(requirements).resolve() if requirements else None,
+        "requirements_dir": PROJECT_DIR / c.config.get("requirements_dir"),
         "output_dir": output_path(c, output),
         "tools_dir": tools_dir(c),
     }
@@ -95,9 +98,7 @@ def record_inputs(c, plan):
     from airoh.provenance import record_sources
 
     c.config.files = {name: {"output_file": plan[key]}
-                      for name, key in (("bids", "bids_dir"), ("containers", "containers_dir"),
-                                        ("requirements", "requirements_dir"))
-                      if plan[key]}
+                      for name, key in (("bids", "bids_dir"), ("containers", "containers_dir"))}
     record_sources(c, output=state(c, plan["output_dir"], "MANIFEST.json"))
 
 
@@ -108,7 +109,7 @@ def record_inputs(c, plan):
             "engine": "Force a container engine: docker or apptainer (default: auto).",
             "scheduler": "local (run here) or slurm (cluster jobs: Apptainer, .sif required).",
             "smoke": "Keep only the first T1w (used by run-smoke)."})
-def run_check(c, bids=None, containers=None, requirements=None, output=None, tools=None,
+def run_check(c, bids=None, containers=None, output=None, tools=None,
               subjects=None, engine=None, scheduler="local", smoke=False):
     """
     Check dataset, tools, images, requirements, engine and output — run nothing.
@@ -126,7 +127,7 @@ def run_check(c, bids=None, containers=None, requirements=None, output=None, too
 
     if scheduler not in SCHEDULERS:
         raise Exit(f"❌ Unknown --scheduler '{scheduler}' (choose from {', '.join(SCHEDULERS)}).")
-    plan = check_everything(input_paths(c, bids, containers, requirements, output),
+    plan = check_everything(input_paths(c, bids, containers, output),
                             engine=engine, scheduler=scheduler, subjects=split_list(subjects),
                             tools=split_list(tools), smoke=smoke)
     if not plan["ready"]:
@@ -285,7 +286,7 @@ def run_aggregate(c, output=None):
             "slurm_array": "Which lines of jobs.txt (participants) the array runs, e.g. 1-20 "
                            "for a pilot or 1-500%50 (default: all).",
             "force": "Delete every computed output first, then run from scratch."})
-def run(c, bids=None, containers=None, requirements=None, output=None, tools=None,
+def run(c, bids=None, containers=None, output=None, tools=None,
         subjects=None, engine=None, scheduler="local", slurm_account=None, slurm_array=None,
         force=False):
     """
@@ -304,9 +305,8 @@ def run(c, bids=None, containers=None, requirements=None, output=None, tools=Non
     if force:
         print("💥 --force: removing every computed output before running")
         clean(c, output=output)
-    plan = run_check(c, bids=bids, containers=containers, requirements=requirements,
-                     output=output, tools=tools, subjects=subjects, engine=engine,
-                     scheduler=scheduler)
+    plan = run_check(c, bids=bids, containers=containers, output=output, tools=tools,
+                     subjects=subjects, engine=engine, scheduler=scheduler)
     if scheduler == "slurm":
         write_slurm(plan, slurm_account, slurm_array)
         return
@@ -340,14 +340,14 @@ def write_slurm(plan, account=None, array=None):
 
 
 @task(help={**PATH_HELP})
-def run_smoke(c, bids=None, containers=None, requirements=None, output=None):
+def run_smoke(c, bids=None, containers=None, output=None):
     """
     Smoke test: a minimal end-to-end pass over the whole pipeline.
 
     One T1w × SynthStrip, run locally. The point is to exercise the plumbing
     quickly, not to produce real results.
     """
-    run_check(c, bids=bids, containers=containers, requirements=requirements, output=output,
+    run_check(c, bids=bids, containers=containers, output=output,
               tools="synthstrip", smoke=True)
     run_skullstrip(c, output=output, smoke=True)
     run_aggregate(c, output=output)
