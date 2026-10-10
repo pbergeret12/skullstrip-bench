@@ -8,16 +8,18 @@ A tool config looks like:
     container: synthstrip_1.8           # <containers>/synthstrip_1.8.tar or .sif
     command: mri_synthstrip -i {input} -m {mask} -t {threads}
     mask_output: "{mask}"               # optional: where the tool writes its mask
-    postprocess: labels_to_mask         # optional: turn the output into a mask
-    requires: [atlas.nii.gz]            # optional: files in <requirements>/<name>/
+    postprocess: labels_to_mask         # optional: output → mask (or synthseg_brain_mask)
+    requires: [atlas.nii.gz]            # optional: files in container_requirements/<name>/
+    refines_masks: true                 # optional: refines other tools' masks (reconall.yaml)
     timeout_min: 30                     # optional: stop a run after 30 minutes
     cpus: 4                             # cluster resources for one run
     mem_gb: 8
     minutes: 5                          # expected duration of one run on a cluster
 
-Files a tool needs besides its image (atlases, templates, configs) never live
-in this repository: they come from the user's requirements folder, in a
-subfolder named after the tool, mounted read-only as `{requirements}`.
+Files a tool needs besides its image (atlases, templates, configs) ship with
+this project, in container_requirements/<name>/ (and inside the tool's own
+container), mounted read-only as `{requirements}`: users bring only their
+images and their dataset.
 """
 from pathlib import Path
 from string import Formatter
@@ -25,11 +27,12 @@ from string import Formatter
 import yaml
 
 REQUIRED_KEYS = ("name", "image", "container", "command")
-OPTIONAL_KEYS = ("mask_output", "postprocess", "requires", "timeout_min",
+OPTIONAL_KEYS = ("mask_output", "postprocess", "requires", "refines_masks", "timeout_min",
                  "cpus", "mem_gb", "minutes")
 NUMBER_KEYS = ("timeout_min", "cpus", "mem_gb", "minutes")
-PLACEHOLDERS = {"input", "mask", "output_prefix", "requirements", "threads"}
-POSTPROCESSES = {"labels_to_mask"}  # implemented in analysis/postprocess.py
+PLACEHOLDERS = {"input", "mask", "output_prefix", "requirements", "threads", "license"}
+POSTPROCESSES = {"labels_to_mask", "synthseg_brain_mask",   # in analysis/postprocess.py
+                 "fmriprep_brain_mask"}
 DEFAULT_RESOURCES = {"cpus": 1, "mem_gb": 4, "minutes": 10}
 
 
@@ -74,6 +77,8 @@ def config_problem(config, expected_name):
             return f"uses unknown placeholders in {key}: {', '.join(sorted(bad))}"
     if config.get("postprocess", "labels_to_mask") not in POSTPROCESSES:
         return f"has unknown postprocess '{config['postprocess']}'"
+    if not isinstance(config.get("refines_masks", False), bool):
+        return f"has refines_masks '{config['refines_masks']}', expected true or false"
     for key in NUMBER_KEYS:
         if key in config and not is_positive_number(config[key]):
             return f"has {key} '{config[key]}', expected a positive number"

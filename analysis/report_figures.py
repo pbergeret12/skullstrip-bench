@@ -9,6 +9,8 @@ The slices are chosen from the T1w alone, so every tool is shown on exactly
 the same slices of a given T1w — differences between columns are differences
 between masks.
 """
+import warnings
+
 import matplotlib
 
 matplotlib.use("Agg")  # no screen needed
@@ -44,6 +46,11 @@ def slice_positions(t1w_path, n_slices=N_SLICES):
     return {axis: np.percentile(head_coords[:, index],
                                 np.linspace(*SLICE_RANGES[axis], n_slices)).round(1).tolist()
             for index, axis in enumerate("xyz")}
+
+
+# nilearn warns when it casts integer T1w images to float for display. That is
+# harmless, and it would fill every run's .err file, which is kept for errors.
+warnings.filterwarnings("ignore", message="Casting data from", category=UserWarning)
 
 
 def draw_mask_outline(t1w_path, mask_path, thumbnail_file, full_file):

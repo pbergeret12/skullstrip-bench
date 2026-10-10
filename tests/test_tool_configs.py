@@ -70,3 +70,16 @@ def test_requires_and_resources(tmp_path):
     assert missing_requirements(atlas, tmp_path / "req") == ["a.nii.gz"]
     (tmp_path / "req" / "atlas" / "a.nii.gz").write_text("")
     assert missing_requirements(atlas, tmp_path / "req") == []
+
+
+def test_every_required_file_ships_with_the_project():
+    """Users bring only images and a dataset: what a tool needs must be bundled."""
+    from pathlib import Path
+
+    from analysis.tool_configs import missing_requirements
+
+    project = Path(__file__).resolve().parents[1]
+    tools, problems = load_tools(project / "tools")
+    assert problems == {}
+    for tool in tools.values():
+        assert missing_requirements(tool, project / "container_requirements") == []

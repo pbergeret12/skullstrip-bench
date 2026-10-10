@@ -1,7 +1,8 @@
-# Everything the pipeline computes stays out of git: the report shows
-# participants' brains, and the metrics and logs are per-participant data.
-report/
-logs/
+# Everything the pipeline computes stays out of git: the report and its
+# figures show participants' brains, and the metrics are per-participant data.
+report.html
+figures/
+metrics.csv
 
 # Internal state: ignored, except the two small provenance records, which say
 # what produced the outputs and from which inputs.

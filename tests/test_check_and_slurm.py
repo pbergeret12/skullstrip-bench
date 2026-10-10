@@ -72,8 +72,8 @@ def slurm_plan(tmp_path):
     stems = [("01", "sub-01_run-1"), ("01", "sub-01_run-2"), ("02", "sub-02")]
     runs = [{"tool": tool, "subject": subject, "stem": stem}
             for subject, stem in stems for tool in tools]
-    return {"output_dir": str(tmp_path / "out"), "tools": tools, "runs": runs,
-            "subjects": ["sub-01", "sub-02"]}
+    return {"output_dir": str(tmp_path / "out"), "workdir": str(tmp_path / "work"),
+            "tools": tools, "runs": runs, "subjects": ["sub-01", "sub-02"]}
 
 
 def test_resources_take_largest_tool_and_busiest_participant(tmp_path):
@@ -94,38 +94,33 @@ def test_measured_apptainer_durations_replace_estimates(tmp_path):
     assert resources["per_tool"]["fast"] == (3, "estimated")
 
 
-def test_slurm_files_one_participant_per_line(tmp_path):
-    slurm_dir, _ = write_slurm_files(slurm_plan(tmp_path), tmp_path, "/env/bin/invoke",
-                                     "invoke run --scheduler slurm")
-    assert (slurm_dir / "jobs.txt").read_text() == "sub-01\nsub-02\n"
-    array = (slurm_dir / "skullstrip_array.sh").read_text()
-    assert "#SBATCH --array=1-2\n" in array
-    assert "#SBATCH --account=def-CHANGEME" in array
-    assert "#SBATCH --time=01:30:00" in array
-    assert '--threads "$SLURM_CPUS_PER_TASK" --work-root "$SLURM_TMPDIR/work"' in array
-    assert "run-aggregate" in (slurm_dir / "skullstrip_report.sh").read_text()
-    assert f"--error={tmp_path / 'out' / 'logs' / 'slurm'}/array_%A_%a.err" in array
-    assert slurm_dir == tmp_path / "out" / ".skullstrip-bench" / "slurm"
-    assert "--dependency=afterany" in (slurm_dir / "submit.sh").read_text()
-
-
-def test_account_and_array_can_be_set_at_generation(tmp_path):
-    slurm_dir, _ = write_slurm_files(slurm_plan(tmp_path), tmp_path, "/env/bin/invoke", "cmd",
-                                     account="def-mypi", array="1-1")
-    array = (slurm_dir / "skullstrip_array.sh").read_text()
-    assert "#SBATCH --account=def-mypi" in array and "#SBATCH --array=1-1\n" in array
-    assert "def-CHANGEME" not in (slurm_dir / "skullstrip_report.sh").read_text()
+def test_one_sbatch_and_jobs_txt_in_the_workdir(tmp_path):
+    sbatch_file, _ = write_slurm_files(slurm_plan(tmp_path), tmp_path, "/env/bin/invoke",
+                                       "invoke run --scheduler slurm")
+    workdir = tmp_path / "work"
+    assert sbatch_file == workdir / "skullstrip_bench_sbatch.sh"
+    assert sorted(path.name for path in workdir.iterdir()) == [
+        "jobs.txt", "logs", "skullstrip_bench_sbatch.sh"]
+    assert (workdir / "jobs.txt").read_text() == "sub-01\nsub-02\n"
+    sbatch = sbatch_file.read_text()
+    assert "#SBATCH --account=def-CHANGEME" in sbatch
+    assert "#SBATCH --array=1-2\n" in sbatch
+    assert "#SBATCH --time=01:30:00" in sbatch
+    assert f"#SBATCH --output={workdir / 'logs'}/slurm_%A_%a.log" in sbatch
+    assert f"#SBATCH --error={workdir / 'logs'}/slurm_%A_%a.err" in sbatch
+    assert '--threads "$SLURM_CPUS_PER_TASK" --work-root "$SLURM_TMPDIR/work"' in sbatch
+    assert 'run-update --output' in sbatch
+    assert not (tmp_path / "out").exists()   # nothing about Slurm in the results folder
 
 
 def test_from_the_tool_container_jobs_rerun_the_same_image(tmp_path, monkeypatch):
     monkeypatch.setenv("SKULLSTRIP_BENCH_IN_CONTAINER", "1")
     monkeypatch.setenv("APPTAINER_CONTAINER", "/images/skullstrip-bench.sif")
-    plan = {**slurm_plan(tmp_path), "bids_dir": "/data/bids", "containers_dir": "/data/img",
-            "requirements_dir": None}
-    slurm_dir, _ = write_slurm_files(plan, tmp_path, "/env/bin/invoke", "cmd")
-    array = (slurm_dir / "skullstrip_array.sh").read_text()
+    plan = {**slurm_plan(tmp_path), "bids_dir": "/data/bids", "containers_dir": "/data/img"}
+    sbatch_file, _ = write_slurm_files(plan, tmp_path, "/env/bin/invoke", "cmd")
+    sbatch = sbatch_file.read_text()
     expected = ("apptainer exec --bind /data/bids,/data/img,"
-                f"{tmp_path / 'out'},\"$SLURM_TMPDIR\" /images/skullstrip-bench.sif "
-                "skullstrip-bench run-skullstrip")
-    assert expected in array
-    assert "cd " not in array
+                f"{tmp_path / 'out'},{tmp_path / 'work'},\"$SLURM_TMPDIR\" "
+                "/images/skullstrip-bench.sif skullstrip-bench run-skullstrip")
+    assert expected in sbatch
+    assert "cd " not in sbatch

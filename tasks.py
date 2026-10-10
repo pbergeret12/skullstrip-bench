@@ -5,9 +5,11 @@ from invoke import task
 # --------------------------------------------------------------------------- #
 # Inputs and outputs
 #
-# Nothing is ever downloaded or copied in: the dataset, the container images
-# and the tools' requirements are read where they are, given by flags (or by
-# defaults under `inputs:` in invoke.yaml). Everything computed goes to
+# Nothing is ever downloaded or copied in: the user brings only the BIDS
+# dataset and the container images, read where they are, given by flags (or
+# by defaults under `inputs:` in invoke.yaml). What a supported tool needs
+# besides its image (e.g. ANTs' template) ships with this project, in
+# container_requirements/. Everything computed goes to
 # --output (default: output_data/): report/ and logs/ for the user, the rest
 # in the hidden .skullstrip-bench/ (see analysis/layout.py and CLAUDE.md,
 # "No fetch step").
@@ -15,15 +17,19 @@ from invoke import task
 PATH_HELP = {
     "bids": "BIDS dataset to benchmark (or `inputs: bids:` in invoke.yaml).",
     "containers": "Folder of container images, .tar and/or .sif (or `inputs: containers:`).",
-    "requirements": "Folder with one subfolder per tool holding the files it needs "
-                    "(atlases, templates…); only needed by tools that declare `requires`.",
-    "output": "Where every result goes (default: output_data/).",
+    "output": "Where the report goes: report.html, figures/, metrics.csv "
+              "(default: output_data/).",
+    "workdir": "Where logs/ (and, with --scheduler slurm, the sbatch script and "
+               "jobs.txt) are written (default: the current directory).",
 }
 SELECTION_HELP = {
     "tools": "Comma-separated tools, e.g. synthstrip,fsl-bet "
              "(default: every compatible image in --containers).",
     "subjects": "Comma-separated subjects, e.g. 10159,sub-10171 (default: all).",
 }
+RECONALL_HELP = ("Comma-separated tools whose masks also go through recon-all the HALFpipe way, "
+                 "e.g. synthseg,ants: an extra column each (e.g. synthseg+reconall). Needs "
+                 "HALFpipe's image and FreeSurfer's license.txt in --containers.")
 SCHEDULERS = ("local", "slurm")
 PROJECT_DIR = Path(__file__).resolve().parent   # also inside the tool's container
 
@@ -53,21 +59,25 @@ def state(c, output, *parts):
     return state_path(output_path(c, output), *parts)
 
 
-def input_paths(c, bids=None, containers=None, requirements=None, output=None):
-    """Every path a check needs, from flags or `inputs:` defaults, made absolute."""
+def input_paths(c, bids=None, containers=None, output=None, workdir=None):
+    """
+    Every path a check needs, made absolute: the user's dataset and images
+    (flags or `inputs:` defaults), this project's tool configs and their
+    bundled requirements, and the output folder.
+    """
     from invoke.exceptions import Exit
 
     defaults = c.config.get("inputs") or {}
     bids = bids or defaults.get("bids")
     containers = containers or defaults.get("containers")
-    requirements = requirements or defaults.get("requirements")
     if not bids or not containers:
         raise Exit("❌ Give --bids and --containers (or set them under `inputs:` in invoke.yaml).")
     return {
         "bids_dir": Path(bids).resolve(),
         "containers_dir": Path(containers).resolve(),
-        "requirements_dir": Path(requirements).resolve() if requirements else None,
+        "requirements_dir": PROJECT_DIR / c.config.get("requirements_dir"),
         "output_dir": output_path(c, output),
+        "workdir": Path(workdir or ".").resolve(),
         "tools_dir": tools_dir(c),
     }
 
@@ -95,9 +105,7 @@ def record_inputs(c, plan):
     from airoh.provenance import record_sources
 
     c.config.files = {name: {"output_file": plan[key]}
-                      for name, key in (("bids", "bids_dir"), ("containers", "containers_dir"),
-                                        ("requirements", "requirements_dir"))
-                      if plan[key]}
+                      for name, key in (("bids", "bids_dir"), ("containers", "containers_dir"))}
     record_sources(c, output=state(c, plan["output_dir"], "MANIFEST.json"))
 
 
@@ -107,9 +115,10 @@ def record_inputs(c, plan):
 @task(help={**PATH_HELP, **SELECTION_HELP,
             "engine": "Force a container engine: docker or apptainer (default: auto).",
             "scheduler": "local (run here) or slurm (cluster jobs: Apptainer, .sif required).",
+            "reconall": RECONALL_HELP,
             "smoke": "Keep only the first T1w (used by run-smoke)."})
-def run_check(c, bids=None, containers=None, requirements=None, output=None, tools=None,
-              subjects=None, engine=None, scheduler="local", smoke=False):
+def run_check(c, bids=None, containers=None, output=None, workdir=None, tools=None,
+              subjects=None, engine=None, scheduler="local", reconall=None, smoke=False):
     """
     Check dataset, tools, images, requirements, engine and output — run nothing.
 
@@ -126,9 +135,10 @@ def run_check(c, bids=None, containers=None, requirements=None, output=None, too
 
     if scheduler not in SCHEDULERS:
         raise Exit(f"❌ Unknown --scheduler '{scheduler}' (choose from {', '.join(SCHEDULERS)}).")
-    plan = check_everything(input_paths(c, bids, containers, requirements, output),
+    plan = check_everything(input_paths(c, bids, containers, output, workdir),
                             engine=engine, scheduler=scheduler, subjects=split_list(subjects),
-                            tools=split_list(tools), smoke=smoke)
+                            tools=split_list(tools), smoke=smoke,
+                            reconall=split_list(reconall))
     if not plan["ready"]:
         raise Exit("❌ Nothing can run: fix the ✘ above, then `invoke run-check` again.")
     record_inputs(c, plan)
@@ -220,22 +230,23 @@ def run_metrics(c, output=None, subjects=None):
 @task(help={"output": PATH_HELP["output"], "subjects": SELECTION_HELP["subjects"]})
 def run_report(c, output=None, subjects=None):
     """
-    Update <output>/report/report.html: one row per T1w, one column per tool, each
+    Update <output>/report.html: one row per T1w, one column per tool, each
     cell showing the mask's outline on the T1w, its metrics, and Good / Bad /
-    Uncertain buttons with a comment box (ratings exported as CSV by the page).
+    Uncertain buttons with a comment box (ratings exported as CSV).
 
-    Each participant has its own part (internal state, its pictures
-    embedded), rewritten here after drawing its missing pictures (cached in
-    report/figures/); report.html is then rebuilt from every part. It can be opened
-    at any time: reloading shows the participants finished since.
+    The pictures are files in <output>/figures/ that the page loads lazily,
+    so the page stays small. Each participant has its own part (internal
+    state), rewritten here after drawing its missing pictures; report.html is
+    then rebuilt from every part. It can be opened at any time: reloading
+    shows the participants finished since.
     """
     from analysis.report import update_report
 
     plan = load_plan(c, output)
-    parts = update_report(plan, planned_subjects(plan, subjects),
-                          c.config.get("report")["plausible_volume_ml"])
-    print(f"📄 {len(parts)} / {len(plan['subjects'])} participants → "
-          f"{Path(plan['output_dir']) / 'report' / 'report.html'}")
+    done = update_report(plan, planned_subjects(plan, subjects),
+                         c.config.get("report")["plausible_volume_ml"])
+    print(f"📄 {done} / {len(plan['subjects'])} participants → "
+          f"{Path(plan['output_dir']) / 'report.html'}")
 
 
 @task(help={"output": PATH_HELP["output"], "subjects": SELECTION_HELP["subjects"]})
@@ -279,22 +290,20 @@ def run_aggregate(c, output=None):
 @task(help={**PATH_HELP, **SELECTION_HELP,
             "engine": "Force a container engine: docker or apptainer (default: auto).",
             "scheduler": "local: run everything here (default). slurm: run nothing, "
-                         "write job scripts in <output>/slurm/ instead.",
-            "slurm_account": "Slurm allocation written in the job scripts, e.g. def-yourpi "
-                             "(default: def-CHANGEME, to edit).",
-            "slurm_array": "Which lines of jobs.txt (participants) the array runs, e.g. 1-20 "
-                           "for a pilot or 1-500%50 (default: all).",
+                         "write skullstrip_bench_sbatch.sh and jobs.txt in the working "
+                         "directory instead.",
+            "reconall": RECONALL_HELP,
             "force": "Delete every computed output first, then run from scratch."})
-def run(c, bids=None, containers=None, requirements=None, output=None, tools=None,
-        subjects=None, engine=None, scheduler="local", slurm_account=None, slurm_array=None,
-        force=False):
+def run(c, bids=None, containers=None, output=None, workdir=None, tools=None,
+        subjects=None, engine=None, scheduler="local", reconall=None, force=False):
     """
     Full pipeline: check, then participant by participant: skullstrip runs,
     metrics, report update (the report grows as participants finish).
 
-    With --scheduler slurm, only the check runs here; the rest becomes a
-    Slurm job array (one task per participant) plus a report job, written to
-    <output>/slurm/ for you to edit (--account, --array) and submit.
+    With --scheduler slurm, only the check runs here; the rest becomes one
+    Slurm job array (one task per participant, each adding itself to the
+    report), written to skullstrip_bench_sbatch.sh in the working directory
+    for you to edit (--account, --array) and submit.
 
     Steps are called directly rather than through `pre=`, so that flags reach
     them. Every step caches by checking whether its output already exists, so
@@ -303,12 +312,12 @@ def run(c, bids=None, containers=None, requirements=None, output=None, tools=Non
     """
     if force:
         print("💥 --force: removing every computed output before running")
-        clean(c, output=output)
-    plan = run_check(c, bids=bids, containers=containers, requirements=requirements,
-                     output=output, tools=tools, subjects=subjects, engine=engine,
-                     scheduler=scheduler)
+        clean(c, output=output, workdir=workdir)
+    plan = run_check(c, bids=bids, containers=containers, output=output, workdir=workdir,
+                     tools=tools, subjects=subjects, engine=engine, scheduler=scheduler,
+                     reconall=reconall)
     if scheduler == "slurm":
-        write_slurm(plan, slurm_account, slurm_array)
+        write_slurm(plan)
         return
     for subject in plan["subjects"]:
         run_skullstrip(c, output=output, subjects=subject)
@@ -317,37 +326,36 @@ def run(c, bids=None, containers=None, requirements=None, output=None, tools=Non
     print("all analyses completed")
 
 
-def write_slurm(plan, account=None, array=None):
-    """Write the Slurm scripts and tell the user what to edit and run."""
+def write_slurm(plan):
+    """Write the sbatch script and jobs.txt, and tell the user what to edit and run."""
     import sys
 
     from analysis.slurm import write_slurm_files
 
-    slurm_dir, resources = write_slurm_files(
+    sbatch_file, resources = write_slurm_files(
         plan, repo_dir=PROJECT_DIR, invoke_bin=Path(sys.executable).parent / "invoke",
-        command_line=" ".join(sys.argv), account=account, array=array)
-    print(f"\n📝 Slurm files written to {slurm_dir}/ (nothing submitted):")
-    print(f"   jobs.txt              {len(plan['subjects'])} participants, one per line")
-    print(f"   skullstrip_array.sh   one task per participant: {resources['cpus']} CPUs, "
-          f"{resources['mem_gb']} GB, {resources['minutes']} min")
-    print("   skullstrip_report.sh  final rebuild of metrics + report once the array has ended")
-    print("   submit.sh             submits both")
-    print(f"   job logs: {Path(plan['output_dir']) / 'logs' / 'slurm'}/ (.log and .err)")
-    if not account:
-        print("\nNext: in both .sh files replace def-CHANGEME with your allocation "
-              "(or pass --slurm-account).")
-    print(f"Check --array in skullstrip_array.sh, then run {slurm_dir / 'submit.sh'}")
+        command_line=" ".join(sys.argv))
+    workdir = Path(plan["workdir"])
+    print(f"\n📝 Written to {workdir}/ (nothing submitted):")
+    print(f"   {sbatch_file.name}   the job array, one task per participant: "
+          f"{resources['cpus']} CPUs, {resources['mem_gb']} GB, {resources['minutes']} min")
+    print(f"   jobs.txt                  {len(plan['subjects'])} participants, one per line")
+    print("   logs/                     the jobs' and the tools' .log and .err")
+    print(f"   report, as participants finish: {Path(plan['output_dir']) / 'report.html'}")
+    print(f"\nNext: in {sbatch_file.name}, replace def-CHANGEME with your allocation (and "
+          f"narrow --array\nif you want fewer than all {len(plan['subjects'])} participants), "
+          f"then:  sbatch {sbatch_file}")
 
 
 @task(help={**PATH_HELP})
-def run_smoke(c, bids=None, containers=None, requirements=None, output=None):
+def run_smoke(c, bids=None, containers=None, output=None, workdir=None):
     """
     Smoke test: a minimal end-to-end pass over the whole pipeline.
 
     One T1w × SynthStrip, run locally. The point is to exercise the plumbing
     quickly, not to produce real results.
     """
-    run_check(c, bids=bids, containers=containers, requirements=requirements, output=output,
+    run_check(c, bids=bids, containers=containers, output=output, workdir=workdir,
               tools="synthstrip", smoke=True)
     run_skullstrip(c, output=output, smoke=True)
     run_aggregate(c, output=output)
@@ -417,26 +425,37 @@ def clean_check(c, output=None):
     remove(state(c, output, "MANIFEST.json"))
 
 
-@task(help={"output": PATH_HELP["output"],
+@task(help={"output": PATH_HELP["output"], "workdir": PATH_HELP["workdir"],
             "tools": "Comma-separated tools to clean (default: all)."})
-def clean_skullstrip(c, output=None, tools=None):
+def clean_skullstrip(c, output=None, workdir=None, tools=None):
     """
-    Remove the outputs of run-skullstrip: logs, and in the internal state the
-    masks, run records and scratch folders. Also the report pictures of those
-    masks (a picture is only valid for the mask it was drawn from) and the
-    per-participant parts of metrics and report, which summarize these runs.
+    Remove the outputs of run-skullstrip: the tools' logs in <workdir>/logs/,
+    and in the internal state the masks, run records and scratch folders.
+    Also the report pictures of those masks (a picture is only valid for the
+    mask it was drawn from) and the per-participant parts of metrics and
+    report, which summarize these runs.
 
     With --tools, only those tools' files go, so their runs (failed ones
-    included) are redone on the next `invoke run`.
+    included) are redone on the next `invoke run`. Cleaning a tool also
+    cleans its recon-all refinement (e.g. synthseg+reconall), which was made
+    from its masks.
     """
     from analysis.layout import logs_path, report_path
 
     output_dir = output_path(c, output)
-    for tool in split_list(tools) or [""]:
-        for folder in (logs_path(output_dir), report_path(output_dir, "figures"),
-                       state(c, output, "masks"), state(c, output, "runs"),
-                       state(c, output, "work")):
-            remove(folder / tool)
+    logs_dir = logs_path(Path(workdir or ".").resolve())
+    per_tool = (logs_dir, report_path(output_dir, "figures"), state(c, output, "masks"),
+                state(c, output, "runs"), state(c, output, "work"))
+    if tools:
+        for tool in split_list(tools):
+            for folder in per_tool:
+                remove(folder / tool)
+                remove(folder / f"{tool}+reconall")
+    else:
+        for tool_logs in sorted(path for path in logs_dir.glob("*") if path.is_dir()):
+            remove(tool_logs)   # the tools' logs; the jobs' own slurm_* logs stay
+        for folder in per_tool[1:]:
+            remove(folder)
     remove(state(c, output, "metrics_parts"))
     remove(state(c, output, "report_parts"))
 
@@ -444,33 +463,39 @@ def clean_skullstrip(c, output=None, tools=None):
 @task(help={"output": PATH_HELP["output"]})
 def clean_metrics(c, output=None):
     """
-    Remove report/metrics.csv and its per-participant parts.
+    Remove metrics.csv and its per-participant parts.
     """
-    remove(output_path(c, output) / "report" / "metrics.csv")
+    remove(output_path(c, output) / "metrics.csv")
     remove(state(c, output, "metrics_parts"))
 
 
 @task(help={"output": PATH_HELP["output"]})
 def clean_report(c, output=None):
     """
-    Remove report/report.html, its pictures and its per-participant parts.
+    Remove report.html, its pictures (figures/) and its per-participant parts.
     """
-    remove(output_path(c, output) / "report" / "report.html")
-    remove(output_path(c, output) / "report" / "figures")
+    remove(output_path(c, output) / "report.html")
+    remove(output_path(c, output) / "figures")
     remove(state(c, output, "report_parts"))
 
 
-@task(help={"output": PATH_HELP["output"]})
-def clean_slurm(c, output=None):
+@task(help={"workdir": PATH_HELP["workdir"]})
+def clean_slurm(c, workdir=None):
     """
-    Remove the generated Slurm scripts and the jobs' logs.
+    Remove the generated sbatch script, jobs.txt and the jobs' own logs from
+    the working directory.
     """
-    remove(state(c, output, "slurm"))
-    remove(output_path(c, output) / "logs" / "slurm")
+    from analysis.slurm import JOBS_FILE, SBATCH_FILE
+
+    workdir = Path(workdir or ".").resolve()
+    for name in (SBATCH_FILE, JOBS_FILE):
+        remove(workdir / name)
+    for log_file in sorted((workdir / "logs").glob("slurm_*")):
+        remove(log_file)
 
 
-@task(help={"output": PATH_HELP["output"]})
-def clean(c, output=None):
+@task(help={"output": PATH_HELP["output"], "workdir": PATH_HELP["workdir"]})
+def clean(c, output=None, workdir=None):
     """
     Remove all computed outputs.
 
@@ -480,7 +505,7 @@ def clean(c, output=None):
     otherwise execute an empty function and silently delete nothing.
     """
     clean_check(c, output=output)
-    clean_skullstrip(c, output=output)
+    clean_skullstrip(c, output=output, workdir=workdir)
     clean_metrics(c, output=output)
     clean_report(c, output=output)
-    clean_slurm(c, output=output)
+    clean_slurm(c, workdir=workdir)

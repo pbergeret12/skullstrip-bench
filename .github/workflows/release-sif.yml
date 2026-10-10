@@ -1,0 +1,53 @@
+# Build the tool's Apptainer image and attach it to a GitHub Release, so that
+# users download one .sif file and need nothing else from this repository:
+#   wget https://github.com/pbergeret12/skullstrip-bench/releases/download/<tag>/skullstrip-bench_<tag>.sif
+#
+# Runs when a release is published (gh release create v0.1.0 ...), or by hand
+# for an existing release tag (Actions tab, "Run workflow").
+name: Release the tool's .sif
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag to build and attach the .sif to"
+        required: true
+
+permissions:
+  contents: write   # to attach the .sif to the release
+
+env:
+  APPTAINER_VERSION: "1.5.4"   # same as inside the tool's image
+
+jobs:
+  sif:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Release tag
+        run: echo "TAG=${{ github.event.release.tag_name || inputs.tag }}" >> "$GITHUB_ENV"
+
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.TAG }}
+
+      - name: Build the Docker image (the tag becomes the tool's version)
+        run: docker build --build-arg VERSION="$TAG" -t "skullstrip-bench:$TAG" .
+
+      - name: Install Apptainer
+        run: |
+          wget -q "https://github.com/apptainer/apptainer/releases/download/v${APPTAINER_VERSION}/apptainer_${APPTAINER_VERSION}_amd64.deb"
+          sudo apt-get update -q
+          sudo apt-get install -y -q "./apptainer_${APPTAINER_VERSION}_amd64.deb"
+
+      - name: Convert to .sif
+        run: |
+          sudo apptainer build "skullstrip-bench_${TAG}.sif" "docker-daemon://skullstrip-bench:${TAG}"
+          sudo chown "$(id -u):$(id -g)" "skullstrip-bench_${TAG}.sif"
+          ls -lh "skullstrip-bench_${TAG}.sif"
+
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$TAG" "skullstrip-bench_${TAG}.sif" --clobber

@@ -18,6 +18,7 @@ from pathlib import Path
 from analysis.image_checks import check_mask
 from analysis.launcher import RunTimeout, prepare_image, run_container
 from analysis.postprocess import POSTPROCESSES
+from analysis.reconall import LICENSE_FILE, prepare_input
 
 OUT_OF_MEMORY_CODES = (137, -9)  # killed by SIGKILL: Docker reports 137, Python -9
 LOG_TAIL_LINES = 15
@@ -74,16 +75,18 @@ def run_one(run, tool, plan, threads=1):
     start = time.monotonic()
     try:
         image = prepare_image(engine, tool, plan["containers_dir"])
-        values = placeholders(run, threads, plan["requirements_dir"], tool, "container")
+        host_values = placeholders(run, threads, plan, tool, "host")
+        if run.get("refines"):
+            prepare_input(run, f"{host_values['output_prefix']}_bids")
+        values = placeholders(run, threads, plan, tool, "container")
         command = shlex.split(tool["command"].format(**values))
-        exit_code = run_container(engine, image, mounts(run, tool, plan["requirements_dir"]),
-                                  command, run["log"], run["err"],
+        exit_code = run_container(engine, image, mounts(run, tool, plan), command,
+                                  run["log"], run["err"],
                                   timeout_min=tool.get("timeout_min"), threads=threads)
         if exit_code in OUT_OF_MEMORY_CODES:
             raise RuntimeError("out of memory (exit code 137): give the engine more RAM")
         if exit_code != 0:
             raise RuntimeError(f"exit code {exit_code}: {log_tail(run)}")
-        host_values = placeholders(run, threads, plan["requirements_dir"], tool, "host")
         mask_file = Path(tool["mask_output"].format(**host_values))
         if tool.get("postprocess"):
             mask_file = POSTPROCESSES[tool["postprocess"]](
@@ -136,7 +139,7 @@ def write_record(run, tool, engine, status, duration_s, exit_code, error):
     record = {"tool": run["tool"], "stem": run["stem"], "subject": run["subject"],
               "status": status, "duration_s": round(duration_s, 1),
               "exit_code": exit_code, "error": error, "engine": engine,
-              "image": tool["image"], "t1w": run["t1w"],
+              "image": tool["image"], "t1w": run["t1w"], "refines": run.get("refines"),
               "mask": run["mask"] if status == "ok" else None,
               "log": run["log"], "err": run["err"]}
     Path(run["record"]).parent.mkdir(parents=True, exist_ok=True)
@@ -144,27 +147,35 @@ def write_record(run, tool, engine, status, duration_s, exit_code, error):
     return record
 
 
-def placeholders(run, threads, requirements_dir, tool, side):
+def placeholders(run, threads, plan, tool, side):
     """
-    Values of `{input}`, `{mask}`, `{output_prefix}`, `{requirements}` and
-    `{threads}`, either as seen inside the container or as the same files seen
-    from the host.
+    Values of `{input}`, `{mask}`, `{output_prefix}`, `{requirements}`,
+    `{license}` and `{threads}`, either as seen inside the container or as the
+    same files seen from the host.
     """
     if side == "container":
         return {"input": f"/input/{Path(run['t1w']).name}", "mask": "/output/mask.nii.gz",
                 "output_prefix": "/output/out", "requirements": "/requirements",
-                "threads": threads}
+                "license": f"/license/{LICENSE_FILE}", "threads": threads}
     work_dir = Path(run["work_dir"])
     return {"input": run["t1w"], "mask": str(work_dir / "mask.nii.gz"),
             "output_prefix": str(work_dir / "out"),
-            "requirements": str(tool_requirements(requirements_dir, tool)), "threads": threads}
+            "requirements": str(tool_requirements(plan.get("requirements_dir"), tool)),
+            "license": str(Path(plan.get("containers_dir") or ".") / LICENSE_FILE),
+            "threads": threads}
 
 
-def mounts(run, tool, requirements_dir=None):
-    """Folders shared with the container: T1w (read-only), work dir, requirements (read-only)."""
+def mounts(run, tool, plan):
+    """
+    Folders shared with the container: T1w (read-only), work dir, and if the
+    tool needs them, its requirements and the FreeSurfer license (read-only).
+    """
     shared = [(Path(run["t1w"]).parent, "/input", True), (run["work_dir"], "/output", False)]
     if tool["requires"]:
-        shared.append((tool_requirements(requirements_dir, tool), "/requirements", True))
+        shared.append((tool_requirements(plan.get("requirements_dir"), tool),
+                       "/requirements", True))
+    if "{license}" in tool["command"]:
+        shared.append((plan["containers_dir"], "/license", True))
     return shared
 
 

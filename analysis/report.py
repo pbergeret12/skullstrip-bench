@@ -1,18 +1,22 @@
 """
-`run-report`: a single self-contained HTML file to judge every mask by eye.
+`run-report`: one HTML page, `report.html`, to judge every mask by eye.
 
 One row per T1w, one column per tool. Each cell shows the mask's outline on the
 T1w (click it for a large, zoomable version), its metrics, and Good / Bad /
 Uncertain buttons with a comment field; the notes are exported as CSV by the
-page itself (no server). Images are embedded in base64, so the file can be
-shared alone.
+page itself (no server).
+
+The pictures are not embedded: the page points to the files in `figures/`
+next to it and the browser loads them lazily, only those on screen (and the
+full-size one on click). The page itself stays small, so hundreds of
+participants fit on it; to move or share the report, keep report.html and
+figures/ together.
 
 The report is incremental: as soon as a participant is done, its rows are
-written to their own part (internal state, images included) and
-`report/report.html` is rebuilt from every part present. It can be opened at any
-time; reloading it shows the participants finished since.
+written to their own part (internal state) and `report.html` is rebuilt from
+every part present. It can be opened at any time; reloading it shows the
+participants finished since.
 """
-import base64
 import html
 from datetime import datetime
 from pathlib import Path
@@ -36,14 +40,16 @@ def update_report(plan, subjects, plausible_volume_ml):
     """
     Rewrite the report part of each subject (drawing its missing pictures),
     then rebuild `report.html`. Expects the subjects' metrics parts to exist.
+    Returns how many participants are processed.
     """
     output_dir = Path(plan["output_dir"])
     tools = sorted(plan["tools"])
     for subject in subjects:
         write_subject_part(subject, tools, output_dir, plausible_volume_ml)
-    return rebuild_from_parts(
+    parts = rebuild_from_parts(
         state_path(output_dir, "report_parts"), ".html", report_path(output_dir, "report.html"),
         lambda parts: report_page(parts, tools, len(plan["subjects"]), plausible_volume_ml))
+    return len(parts)
 
 
 def write_subject_part(subject, tools, output_dir, plausible_volume_ml):
@@ -109,8 +115,9 @@ def row_html(stem, tools, records, metrics, figures_dir, plausible_volume_ml):
 def cell_html(stem, tool, row, figures, plausible_volume_ml):
     """One cell: picture and metrics (or the failure), then the rating controls."""
     if row["status"] == "ok":
-        thumbnail, full = (embedded_jpeg(path) for path in figures)
-        body = (f'<img src="{thumbnail}" data-full="{full}" alt="{html.escape(stem)} {tool}">'
+        thumbnail, full = (figure_url(path) for path in figures)
+        body = (f'<img src="{thumbnail}" data-full="{full}" loading="lazy" '
+                f'alt="{html.escape(stem)} {tool}">'
                 + metrics_html(row, plausible_volume_ml))
     else:
         error = str(row["error"])[:MAX_ERROR_CHARACTERS]
@@ -142,9 +149,15 @@ def rating_html():
             '<textarea placeholder="Comment" rows="2"></textarea>')
 
 
-def embedded_jpeg(path):
-    """A JPEG file as a data URI, so the report needs no other file."""
-    return "data:image/jpeg;base64," + base64.b64encode(Path(path).read_bytes()).decode()
+def figure_url(path):
+    """
+    A picture's address as seen from report.html (figures/<tool>/<file>),
+    stamped with its modification time so that a picture redrawn after a rerun
+    is not shown from the browser's cache.
+    """
+    path = Path(path)
+    stamp = path.stat().st_mtime_ns if path.exists() else 0
+    return html.escape(f"figures/{path.parent.name}/{path.name}?v={stamp}")
 
 
 def fmt(value, spec, missing=""):

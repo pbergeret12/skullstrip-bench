@@ -77,8 +77,8 @@
 <header>
   <h1>Skullstrip Bench</h1>
   <p class="status">
-    <strong>$n_done / $n_planned participants processed</strong> × <strong>$tools</strong>
-    — updated $updated. Reload the page to see participants finished since.
+    <strong>$n_done / $n_planned participants processed</strong> × <strong>$tools</strong>,
+    updated $updated. Reload the page to see participants finished since.
   </p>
   <p class="lede">
     Each picture shows the T1w with the mask's outline in red (axial, coronal, sagittal; same
@@ -187,7 +187,7 @@ $rows
     var blob = new Blob([lines.join("\n") + "\n"], { type: "text/csv" });
     var link = document.createElement("a");
     link.href = URL.createObjectURL(blob);
-    link.download = "skullstrip_notes.csv";
+    link.download = "skullstrip_ratings.csv";
     document.body.appendChild(link); link.click(); link.remove();
   });
 

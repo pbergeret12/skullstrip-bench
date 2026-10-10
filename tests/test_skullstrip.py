@@ -13,15 +13,15 @@ ANTS = {"name": "ants", "requires": ["template.nii.gz"],
 
 
 def test_placeholders_match_between_container_and_host():
-    inside = placeholders(RUN, 4, None, TOOL, "container")
-    outside = placeholders(RUN, 4, None, TOOL, "host")
+    inside = placeholders(RUN, 4, {}, TOOL, "container")
+    outside = placeholders(RUN, 4, {}, TOOL, "host")
     assert TOOL["mask_output"].format(**inside) == "/output/out_mask.nii.gz"
     assert TOOL["mask_output"].format(**outside) == "out/work/fsl-bet/sub-01/out_mask.nii.gz"
     assert inside["input"] == "/input/sub-01_T1w.nii.gz"
 
 
 def test_mounts_share_input_read_only_and_skip_missing_tool_dir():
-    shared = [(str(host), inside, read_only) for host, inside, read_only in mounts(RUN, TOOL, None)]
+    shared = [(str(host), inside, read_only) for host, inside, read_only in mounts(RUN, TOOL, {})]
     assert shared == [("bids/sub-01/anat", "/input", True),
                       ("out/work/fsl-bet/sub-01", "/output", False)]
 
@@ -64,9 +64,9 @@ def test_failure_status():
 
 
 def test_requirements_are_mounted_read_only_per_tool():
-    shared = mounts(RUN, ANTS, "/data/requirements")
+    shared = mounts(RUN, ANTS, {"requirements_dir": "/data/requirements"})
     assert (Path("/data/requirements/ants"), "/requirements", True) in shared
-    inside = placeholders(RUN, 8, "/data/requirements", ANTS, "container")
+    inside = placeholders(RUN, 8, {"requirements_dir": "/data/requirements"}, ANTS, "container")
     assert ANTS["command"].format(**inside).endswith("-e /requirements/template.nii.gz")
 
 
@@ -103,3 +103,20 @@ def test_a_run_leaves_only_logs_mask_and_record(tmp_path, monkeypatch):
     assert (tmp_path / "logs" / "fsl-bet" / "sub-01.log").read_text().endswith(
         "# skullstrip-bench: failed in 0 s\n")
     assert "skullstrip-bench: run failed: exit code 1" in Path(run["err"]).read_text()
+
+
+def test_synthseg_mask_leaves_out_the_csf_around_the_brain(tmp_path):
+    import nibabel as nib
+    import numpy as np
+
+    from analysis.postprocess import synthseg_brain_mask
+
+    labels = np.zeros((4, 4, 4), dtype=np.int32)
+    labels[1, 1, 1], labels[2, 2, 2], labels[3, 3, 3] = 2, 24, 17   # white matter, CSF, other
+    nib.save(nib.Nifti1Image(labels, np.eye(4)), tmp_path / "seg.nii.gz")
+    t1w = nib.Nifti1Image(np.ones((4, 4, 4), dtype=np.int16), np.eye(4))
+    nib.save(t1w, tmp_path / "t1w.nii.gz")
+    synthseg_brain_mask(tmp_path / "seg.nii.gz", tmp_path / "t1w.nii.gz", tmp_path / "mask.nii.gz")
+    mask = np.asanyarray(nib.load(tmp_path / "mask.nii.gz").dataobj)
+    assert mask[1, 1, 1] == 1 and mask[3, 3, 3] == 1
+    assert mask[2, 2, 2] == 0 and mask.sum() == 2

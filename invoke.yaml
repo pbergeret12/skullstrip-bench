@@ -7,7 +7,11 @@
 inputs:
   bids: null          # the BIDS dataset
   containers: null    # container images only: <name>.tar and/or <name>.sif
-  requirements: null  # one subfolder per tool: atlases, templates, configs
+
+# What a supported tool needs besides its image (atlases, templates, configs),
+# one subfolder per tool, shipped with this project and with its container:
+# users bring only their images and their dataset.
+requirements_dir: container_requirements
 
 # source data folder: unused by this project (inputs are read in place, see
 # `inputs:`), kept because airoh's `verify` checks it against its CONTENT.md
@@ -44,17 +48,24 @@ verify:
   # things that look like paths but are not in this repository:
   ignore_paths:
     - "<output>/*"          # placeholders for the user's --output folder
-    - "<requirements>/*"    # ... and --requirements folder
     - "*:*"                 # Docker image references (name:tag)
-    - "ants/*"              # files inside the user's requirements folder
-    - "container_requirements/*"
+    - "ants/*"              # tool requirement files, named relative to their folder
     - "MICCAI2012-Multi-Atlas-Challenge-Data"   # folder inside ANTs' Oasis.zip
-    - "jobs.txt"            # written only by --scheduler slurm, under <output>/slurm/
+    - "jobs.txt"            # written only by --scheduler slurm, in the working directory
     - "slurm"
-    - "report/*"            # paths inside the user's --output folder
+    - "<workdir>"           # placeholders for the user's working directory
+    - "<output>"            # ... and output folder
+    - "results"             # the output folder the README's examples use
+    - "results/*"
+    - "logs"                # written in the user's working directory
     - "logs/*"
     - ".skullstrip-bench/*"
     - "dataset_description.json"   # lives in the user's BIDS dataset
-    - "ants"                # a subfolder of the user's requirements folder
+    - "license.txt"         # the user's FreeSurfer license, in --containers (never here)
+    - "ants"                # a requirements subfolder, named on its own
+    # Deliberately tracked despite size and type: the tools' bundled
+    # requirements (ANTs' OASIS template, 32 MB, CC BY 4.0, see its SOURCE.md),
+    # which users must not have to bring themselves.
+    - "container_requirements/*"
   # Largest file git may track before the check fails (default 10 MB).
   max_tracked_bytes: 10485760
