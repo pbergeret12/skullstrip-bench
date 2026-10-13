@@ -6,16 +6,43 @@ The tool never downloads anything. It runs the container images you already have
 
 The project was built from the `airoh-mini` template. [airoh](https://github.com/SIMEXP/airoh) 🍵 is a small Python package of reusable [invoke](https://www.pyinvoke.org/) tasks for reproducible analyses, developed at SIMEXP. The template gives every project the same shape: a `tasks.py` holding the pipeline steps as invoke tasks, an `invoke.yaml` for paths and settings, `source_data/` for inputs and `output_data/` for results, provenance records written at each run, and a `verify` task that checks the code, the configuration and the documentation still agree. Its name is a nod to Uncle Iroh, from *Avatar: The Last Airbender*, and his love of tea.
 
-Status: built during BrainHack School. All four tools work end to end under Docker, and the tool's own container has run Apptainer successfully. The Slurm mode and nested Apptainer have not run on a real cluster yet.
+Status: built during BrainHack School. All four tools work end to end under Docker, and the Slurm mode with nested Apptainer runs on the Narval cluster (Digital Research Alliance of Canada).
 
 ## Quick start
 
-Install the Python environment with [uv](https://docs.astral.sh/uv/), which also installs the dev tools (flake8, pytest). You also need a container engine, Docker with its daemon running or Apptainer. Apptainer is used if available, otherwise Docker, and `--engine docker` forces one.
+To run Skullstrip Bench on your own computer:
 
-```bash
-uv sync
-uv run invoke run --bids /path/to/bids --containers /path/to/images --output /path/to/results
-```
+1. Install the Python environment with [uv](https://docs.astral.sh/uv/), which also installs the dev tools (flake8, pytest). You also need a container engine, Docker with its daemon running or Apptainer. Apptainer is used if available, otherwise Docker, and `--engine docker` forces one.
+
+   ```bash
+   uv sync
+   ```
+
+2. Put the images of the tools you want to compare in one folder, under the file names the tool looks for. With Docker:
+
+   ```bash
+   mkdir -p /path/to/images && cd /path/to/images
+   docker pull --platform linux/amd64 freesurfer/synthstrip:1.8
+   docker save -o synthstrip_1.8.tar freesurfer/synthstrip:1.8
+   docker pull --platform linux/amd64 gamorosino/fsl:6.0.7.22
+   docker save -o fsl_6.0.7.22.tar gamorosino/fsl:6.0.7.22
+   docker pull --platform linux/amd64 cookpa/synthseg:conda-0.2
+   docker save -o synthseg_conda-0.2.tar cookpa/synthseg:conda-0.2
+   docker pull --platform linux/amd64 antsx/ants:latest
+   docker save -o ants_latest.tar antsx/ants:latest
+   ```
+
+   Every image found in the folder is used, so leave out the tools you do not want. HALFpipe's image is only needed for `--reconall` (see [Recon-all, as in HALFpipe](#recon-all-as-in-halfpipe)).
+
+3. Run the pipeline:
+
+   ```bash
+   uv run invoke run --bids /path/to/bids --containers /path/to/images --output /path/to/results
+   ```
+
+4. Open `report.html` in the output folder and rate the masks (see [Judging the masks](#judging-the-masks)).
+
+### Inputs, outputs and reruns
 
 You bring only your dataset and the container images; anything else a supported tool needs (such as the ANTs template) ships with Skullstrip Bench. The one exception is the optional `--reconall` comparison, which also needs your FreeSurfer license (see [Recon-all, as in HALFpipe](#recon-all-as-in-halfpipe)). The folders are read in place, nothing is copied or linked:
 
@@ -60,113 +87,67 @@ Rate each mask Good, Bad or Uncertain, add a comment if needed, then use Export 
 
 To look at the report on another computer, copy `report.html` and `figures/` together (the output folder, without its hidden `.skullstrip-bench/`). It shows participants' brains, so copy or share it only where the dataset's rules allow.
 
-## Running with Apptainer and Slurm
+## Running on a cluster
 
-On a cluster you need neither Python nor this repository: the tool ships as one image, `skullstrip-bench.sif`, holding the Python environment, the code, the tool configs and Apptainer itself, so that it can launch the skull-stripping containers from inside (Apptainer nested in Apptainer). Every task works as with `uv run invoke`, provided the folders it reads or writes are bound into the container at the same path. The tool's own image never goes in `--containers`, which only holds the images it runs.
+On a Slurm cluster you need neither Python nor this repository: the tool ships as one Apptainer image, `skullstrip-bench_<version>.sif`, which launches the tools' images from inside (Apptainer nested in Apptainer). The steps below were written on Narval; other clusters of the Digital Research Alliance of Canada work the same way.
 
-Nested Apptainer requires unprivileged user namespaces on the compute nodes, which is how current Apptainer installations without setuid work. If a cluster refuses it, run the tool from a Python environment on the cluster instead (`uv sync`, then `uv run invoke …`); everything else stays the same.
+1. On a login node (it has internet access), download the tool from the [releases](https://github.com/pbergeret12/skullstrip-bench/releases). Keep it outside your images folder, which must hold only the tools' images.
 
-### Preparing the images
+   ```bash
+   cd $SCRATCH
+   wget https://github.com/pbergeret12/skullstrip-bench/releases/download/v0.4.0/skullstrip-bench_v0.4.0.sif
+   ```
 
-The tool itself is one file, `skullstrip-bench_<version>.sif`, published with each [release](https://github.com/pbergeret12/skullstrip-bench/releases). Download it once on a login node, which has internet access, and store it wherever you keep your images (outside the folder you pass as `--containers`):
+2. Still on the login node, build the tools' images into one folder. The digests pin the exact images this project was tested with, and the file names are how the tool recognizes each image. Run this inside `tmux`, since it takes a while and must survive a dropped SSH connection.
 
-```bash
-wget https://github.com/pbergeret12/skullstrip-bench/releases/download/<version>/skullstrip-bench_<version>.sif
-```
+   ```bash
+   module load apptainer
+   # Temporary files and cache on $SCRATCH: $HOME has a small quota.
+   export APPTAINER_TMPDIR=$SCRATCH/apptainer_tmp APPTAINER_CACHEDIR=$SCRATCH/apptainer_cache
+   mkdir -p $APPTAINER_TMPDIR $APPTAINER_CACHEDIR $SCRATCH/containers
+   cd $SCRATCH/containers
 
-The skull-stripping images are built directly on the login node from Docker Hub. The digests pin the exact images this project was tested with, and the file names are how the tool recognizes each image. Run this inside `tmux`, so that it survives a dropped SSH connection.
+   apptainer build synthstrip_1.8.sif     docker://freesurfer/synthstrip@sha256:ebbc177221194371f16362513ace68312a22922bb581bdfa618ac7ff9c1d2c06
+   apptainer build fsl_6.0.7.22.sif       docker://gamorosino/fsl@sha256:e17b13fe4af7ec79643595bb2de16584193234b99cb2fafbd7c786a1dc8b8d43
+   apptainer build synthseg_conda-0.2.sif docker://cookpa/synthseg@sha256:4c632dd3c7591e72b4b87357449e50cc96cc29cef92326db879264be107dd4c9
+   apptainer build ants_latest.sif        docker://antsx/ants@sha256:59c45f54a1f1dc69134f63bec91a726e41c71c64a16cc21cda0b54526910a3c3
+   ```
 
-```bash
-module load apptainer
-# Temporary files and cache on $SCRATCH: $HOME has a small quota.
-export APPTAINER_TMPDIR=$SCRATCH/apptainer_tmp APPTAINER_CACHEDIR=$SCRATCH/apptainer_cache
-mkdir -p $APPTAINER_TMPDIR $APPTAINER_CACHEDIR $SCRATCH/containers
-cd $SCRATCH/containers
+   For `--reconall` only, add HALFpipe's image and your FreeSurfer license to the same folder:
 
-apptainer build synthstrip_1.8.sif     docker://freesurfer/synthstrip@sha256:ebbc177221194371f16362513ace68312a22922bb581bdfa618ac7ff9c1d2c06
-apptainer build fsl_6.0.7.22.sif       docker://gamorosino/fsl@sha256:e17b13fe4af7ec79643595bb2de16584193234b99cb2fafbd7c786a1dc8b8d43
-apptainer build synthseg_conda-0.2.sif docker://cookpa/synthseg@sha256:4c632dd3c7591e72b4b87357449e50cc96cc29cef92326db879264be107dd4c9
-apptainer build ants_latest.sif        docker://antsx/ants@sha256:59c45f54a1f1dc69134f63bec91a726e41c71c64a16cc21cda0b54526910a3c3
-```
+   ```bash
+   apptainer build halfpipe-1.3.1.sif docker://halfpipe/halfpipe@sha256:b3d4d714cca689541f02e88c7ae8cdd65ca5b23c9e060785e265bfad12b186ca
+   cp ~/license.txt $SCRATCH/containers/license.txt
+   ```
 
-If Docker Hub answers "toomanyrequests" (login nodes share one address), retry later or log in with `apptainer remote login --username <you> docker://docker.io`. Images you already have as `.tar` archives convert the same way, with `docker-archive://path/to/<name>.tar`.
+   If you already use HALFpipe, copying its existing `.sif` as `halfpipe-1.3.1.sif` works as well, as long as it is version 1.3.1.
 
-### Publishing a new version of the tool
+3. From the directory you want to work in, still on the login node, generate the job script. This only checks the dataset and the images, then writes `skullstrip_bench_sbatch.sh` and `jobs.txt` (one participant per line); nothing is computed yet.
 
-For maintainers. Publishing a GitHub release builds the tool's `.sif` on GitHub's servers and attaches it to the release (`.github/workflows/release-sif.yml`); nothing has to be built or uploaded from your own machine:
+   ```bash
+   mkdir -p $SCRATCH/my_study && cd $SCRATCH/my_study
+   apptainer run --bind /path/to/bids,$SCRATCH/containers,$PWD $SCRATCH/skullstrip-bench_v0.4.0.sif run \
+       --scheduler slurm --bids /path/to/bids --containers $SCRATCH/containers --output $PWD/results
+   ```
 
-```bash
-gh release create v0.2.0 --target <branch or commit> --title "v0.2.0" --notes "What changed"
-```
+   Add `--tools synthstrip,fsl-bet` to restrict the tools, `--subjects` to restrict the participants, and `--reconall synthseg,ants` for the recon-all columns.
 
-The release tag becomes the tool's version, recorded in every plan the tool writes. To work on the image locally instead, `uv run invoke build-image --output-dir /path/to/folder` builds it with Docker and saves it as `skullstrip-bench_<commit>.tar`, which `apptainer build skullstrip-bench.sif docker-archive://…` converts. The build downloads everything over https, because some institutional networks stall plain-http Ubuntu mirrors.
+4. Open `skullstrip_bench_sbatch.sh`, replace `def-CHANGEME` with your allocation (for example `def-yourpi`), and if you wish change `#SBATCH --array=1-N`: `1-20` for a pilot on the first 20 participants, `1-N%50` to run at most 50 at once. Then submit it:
 
-### Testing on a compute node
+   ```bash
+   sbatch skullstrip_bench_sbatch.sh
+   ```
 
-Before a real run, one small job checks on a compute node that the tool's container runs, that nested Apptainer works there, and that two participants go through end to end with the two fast tools. Save it as `test_skullstrip_bench.sh`, fill in the paths and the account, then `sbatch test_skullstrip_bench.sh`.
+5. Follow the run. Each array task processes one participant, every tool in turn, and adds it to `results/report.html` as soon as it is done, so the report can be opened at any time. The jobs' logs and each tool's logs are in `logs/`, next to the sbatch script. `seff <jobid>` shows the real memory and time used.
 
-```bash
-#!/bin/bash
-#SBATCH --account=def-yourpi
-#SBATCH --job-name=skullstrip-bench-test
-#SBATCH --cpus-per-task=4
-#SBATCH --mem=8G
-#SBATCH --time=01:00:00
-#SBATCH --output=skullstrip-bench-test_%j.log
-#SBATCH --error=skullstrip-bench-test_%j.err
-set -euo pipefail
+The resources of one task are computed from the selected tools: their largest CPU and memory needs, since they run one after the other, and a walltime of the sum of their durations × 1.5 + 10 min. After a pilot, generating the script again (step 3) replaces the durations written in the tools' configs by those measured on your cluster.
 
-TOOL_SIF=/path/to/skullstrip-bench.sif
-BIDS=/path/to/bids_dataset
-CONTAINERS=/path/to/containers          # holds synthstrip_1.8.sif and fsl_6.0.7.22.sif
-OUTPUT=$SCRATCH/skullstrip_bench_test
-SUBJECTS=10159,10171                    # two participants of the dataset
+If something goes wrong:
 
-module load apptainer
-export APPTAINER_TMPDIR=$SLURM_TMPDIR
-mkdir -p "$OUTPUT"
-binds="$BIDS,$CONTAINERS,$OUTPUT,$SLURM_TMPDIR"
-
-echo "Tool version: $(apptainer exec "$TOOL_SIF" cat /opt/skullstrip-bench/VERSION)"
-
-echo "Nested Apptainer check:"
-apptainer exec --bind "$binds" "$TOOL_SIF" \
-    apptainer exec "$CONTAINERS/synthstrip_1.8.sif" mri_synthstrip --help | head -3
-
-apptainer run --bind "$binds" "$TOOL_SIF" run \
-    --bids "$BIDS" --containers "$CONTAINERS" --output "$OUTPUT" \
-    --tools synthstrip,fsl-bet --subjects "$SUBJECTS"
-```
-
-If the nested check fails, the job stops there (`set -e`) and its output shows Apptainer's message, which is what to send to the cluster's support. Otherwise the report in the output folder holds the two participants, and the tools' logs are in `logs/` in the directory you submitted the job from.
-
-### Running a whole dataset
-
-`--scheduler slurm` is the flag that says the tool runs on an HPC. Without it, everything runs locally and the tool produces the report. With it, the tool computes nothing: after the check, it writes one sbatch script that processes the participants in parallel. Run it on a login node, from the directory you want to work in:
-
-```bash
-cd $SCRATCH/my_study
-module load apptainer
-apptainer run --bind /path/bids,/path/containers,$PWD skullstrip-bench.sif run \
-    --scheduler slurm --bids /path/bids --containers /path/containers --output $PWD/results \
-    --tools synthstrip,fsl-bet
-```
-
-This writes two files in the working directory, and the jobs will write their logs next to them:
-
-| File | Content |
-| ---- | ------- |
-| `skullstrip_bench_sbatch.sh` | The job array, the only thing to submit. One task is one participant: every selected tool on all of that participant's T1w images, working on the node's local disk (`$SLURM_TMPDIR`) with the threads Slurm granted, after which the participant is added to the report and the metrics in `results/`. |
-| `jobs.txt` | One participant per line (`sub-XX`). Array task N processes line N. |
-| `logs/` | The jobs' own `slurm_<job>_<task>.log` and `.err`, and each tool's `.log` and `.err`. |
-
-Open `skullstrip_bench_sbatch.sh` and replace `def-CHANGEME` with your allocation (for example `def-yourpi`). The array line, `#SBATCH --array=1-N`, runs every participant of `jobs.txt`; change it to `1-20` for a pilot on the first 20, or `1-N%50` to run at most 50 at once. Then submit it:
-
-```bash
-sbatch skullstrip_bench_sbatch.sh
-```
-
-There is no separate report job: each task adds its participant to `results/report.html` as soon as it is done, so the report can be opened at any time. The resources of one task are filled in from the selected tools: the largest CPU and memory needs, since the tools run one after the other, and a walltime of the sum of their durations × 1.5 + 10 min. Durations come from each tool's YAML, or from durations already measured with Apptainer in that output folder, so after a pilot, generating the script again gives walltimes that fit the cluster. `seff <jobid>` shows the real memory peak.
+- If Docker Hub answers "toomanyrequests" during step 2 (login nodes share one address), retry later or log in with `apptainer remote login --username <you> docker://docker.io`.
+- The FSL and HALFpipe images are about 5 GB, and the login node may kill their build during the final compression. Build them in two steps instead: `apptainer build --sandbox fsl_sandbox docker://…` on the login node, then `apptainer build fsl_6.0.7.22.sif fsl_sandbox/` inside a job with a few cores, and delete the sandbox.
+- Images you already have as `.tar` archives convert the same way, with `docker-archive://path/to/<name>.tar` instead of `docker://…`.
+- Nested Apptainer needs unprivileged user namespaces on the compute nodes. If a cluster refuses them, run the tool from a Python environment on the cluster instead (clone this repository, `uv sync`, then `uv run invoke run …` with the same flags).
 
 ## Compatible containers
 
@@ -179,11 +160,9 @@ A container is compatible when `tools/` has a config for it. To run, its image m
 | `synthseg` | `cookpa/synthseg:conda-0.2` | `synthseg_conda-0.2.tar` or `.sif` | segmentation (`--robust`) turned into a mask as in our HALFpipe pipeline: every label except the CSF around the brain (24), resampled onto the T1w grid | about 2 min on a cluster node | 8 CPUs, 16 GB |
 | `ants` | `antsx/ants:latest` | `ants_latest.tar` or `.sif` | `antsBrainExtraction.sh` mask, with the OASIS template bundled in `container_requirements/ants/` | about 6.5 min | 8 CPUs, 8 GB |
 
-On a machine with Docker, an image becomes a `.tar` with `docker pull <image> && docker save -o <file name>.tar <image>`; on a cluster, build the `.sif` directly as shown in [Preparing the images](#preparing-the-images).
+On a machine with Docker, the images become `.tar` files as shown in [Quick start](#quick-start); on a cluster, build the `.sif` directly as shown in [Running on a cluster](#running-on-a-cluster).
 
 The ANTs template (three files, 34 MB) is the OASIS template from the ANTs templates by Brian Avants and Nick Tustison on figshare ([doi:10.6084/m9.figshare.915436](https://doi.org/10.6084/m9.figshare.915436)), redistributed unchanged under the CC BY 4.0 license; see `container_requirements/ants/SOURCE.md`. It is part of the repository and of the tool's own container.
-
-Building the FSL image (about 5 GB) on a cluster login node can be killed by the node's limits during its long compression step. Build it in two steps instead: `apptainer build --sandbox fsl_sandbox docker://…` on the login node (download and extraction only, a few minutes), then `apptainer build fsl_6.0.7.22.sif fsl_sandbox/` inside a job with a few cores, and delete the sandbox.
 
 Under Docker on a Mac, SynthSeg needs at least 12 GB for the Docker virtual machine (it crashed with 8 GB), and long runs need free disk space: a full disk crashed Docker during development. The runtimes above were measured under amd64 emulation on an Apple Silicon Mac and are faster natively.
 
@@ -193,7 +172,7 @@ Skullstrip Bench exists first to choose the skull stripping fed to the HALFpipe 
 
 `--reconall synthseg,ants` shows that final mask next to each named tool's own, as an extra column (`synthseg+reconall`, `ants+reconall`). For every T1w, the T1w stripped with the tool's mask goes through fMRIPrep from HALFpipe's own image, anatomy only, with skull stripping skipped and recon-all on, as a pre-stripped T1w does in HALFpipe. The mask shown is fMRIPrep's final `desc-brain_mask`, put back on the T1w grid. These columns get a Dice against the consensus but do not vote in it, since they would count their tool twice.
 
-This needs two more files in `--containers`: HALFpipe's image as `halfpipe-1.3.1.sif` (or `.tar`), which already holds fMRIPrep, FreeSurfer and the templates, and your FreeSurfer license as `license.txt` (free from the FreeSurfer website; it is personal, so it cannot ship with this public project). Recon-all takes several hours per T1w and per tool, so the sbatch walltime grows accordingly (8 CPUs, 16 GB). Cleaning a tool with `clean-skullstrip --tools synthseg` also cleans `synthseg+reconall`, which was made from its masks.
+This needs two more files in `--containers`: HALFpipe's image as `halfpipe-1.3.1.sif` (or `.tar`, from `halfpipe/halfpipe:1.3.1`), which already holds fMRIPrep, FreeSurfer and the templates, and your FreeSurfer license as `license.txt` (free from the FreeSurfer website; it is personal, so it cannot ship with this public project). Step 2 of [Running on a cluster](#running-on-a-cluster) shows how to get both. Without `--reconall`, neither is used. Recon-all takes several hours per T1w and per tool, so the sbatch walltime grows accordingly (8 CPUs, 16 GB). Cleaning a tool with `clean-skullstrip --tools synthseg` also cleans `synthseg+reconall`, which was made from its masks.
 
 ### Adding a tool
 
@@ -215,6 +194,16 @@ minutes: 5                          # expected duration on a cluster node
 ```
 
 Inside the container, `{input}` is the T1w, `{mask}` where to write the mask, `{output_prefix}` a prefix for tools that name their own outputs, `{requirements}` the tool's bundled files (read-only) and `{threads}` the number of cores it may use. The launcher also sets `OMP_NUM_THREADS` and `ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS`, so that a tool never grabs every core of a shared node. Do not write `${VAR}` in a command, since braces are placeholders here; `$VAR` works.
+
+### Publishing a new version of the tool
+
+For maintainers. Publishing a GitHub release builds the tool's `.sif` on GitHub's servers and attaches it to the release (`.github/workflows/release-sif.yml`); nothing has to be built or uploaded from your own machine:
+
+```bash
+gh release create v0.5.0 --target <branch or commit> --title "v0.5.0" --notes "What changed"
+```
+
+The release tag becomes the tool's version, recorded in every plan the tool writes. Update the version in the download command of [Running on a cluster](#running-on-a-cluster) at the same time. To work on the image locally instead, `uv run invoke build-image --output-dir /path/to/folder` builds it with Docker and saves it as `skullstrip-bench_<commit>.tar`, which `apptainer build skullstrip-bench.sif docker-archive://…` converts. The build downloads everything over https, because some institutional networks stall plain-http Ubuntu mirrors.
 
 ## Tasks
 
